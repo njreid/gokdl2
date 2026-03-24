@@ -10,10 +10,49 @@ import (
 )
 
 func parse(s *tokenizer.Scanner) (*document.Document, error) {
+	if s.Version != tokenizer.VersionAuto {
+		return parseOne(s)
+	}
+
+	// for VersionAuto, we need to be able to retry if the first attempt fails
+	// and it was likely a v1 document
+	data, err := io.ReadAll(s)
+	if err != nil {
+		return nil, err
+	}
+
+	// try v2 first
+	s2 := tokenizer.NewSlice(data)
+	s2.RelaxedNonCompliant = s.RelaxedNonCompliant
+	s2.ParseComments = s.ParseComments
+	s2.Version = tokenizer.VersionV2
+	doc, err := parseOne(s2)
+	if err == nil {
+		return doc, nil
+	}
+
+	// if v2 failed, it might be a v1 document; if it had a v2 marker, don't fallback
+	if s2.Version == tokenizer.VersionV2 && s2.Offset() > 0 {
+		// if version was explicitly set to v2 by marker, don't fallback
+		return nil, err
+	}
+
+	// fallback to v1
+	s1 := tokenizer.NewSlice(data)
+	s1.RelaxedNonCompliant = s.RelaxedNonCompliant
+	s1.ParseComments = s.ParseComments
+	s1.Version = tokenizer.VersionV1
+	return parseOne(s1)
+}
+
+func parseOne(s *tokenizer.Scanner) (*document.Document, error) {
 	defer s.Close()
 
 	p := parser.New()
-	opts := parser.ParseContextOptions{RelaxedNonCompliant: s.RelaxedNonCompliant}
+	opts := parser.ParseContextOptions{
+		RelaxedNonCompliant: s.RelaxedNonCompliant,
+		Version:             s.Version,
+	}
 	if s.ParseComments {
 		opts.Flags |= parser.ParseComments
 	}
@@ -27,7 +66,9 @@ func parse(s *tokenizer.Scanner) (*document.Document, error) {
 		return nil, s.Err()
 	}
 
-	return c.Document(), nil
+	doc := c.Document()
+	doc.Version = int(s.Version)
+	return doc, nil
 }
 
 type ParseOptions = parser.ParseContextOptions
@@ -43,6 +84,7 @@ func ParseWithOptions(r io.Reader, opts ParseOptions) (*document.Document, error
 	s := tokenizer.New(r)
 	s.RelaxedNonCompliant = opts.RelaxedNonCompliant
 	s.ParseComments = opts.Flags.Has(parser.ParseComments)
+	s.Version = opts.Version
 	return parse(s)
 }
 

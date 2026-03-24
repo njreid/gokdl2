@@ -49,35 +49,47 @@ func (p *Properties) Exist() bool {
 }
 
 func (p *Properties) String() string {
+	return p.string(false, tokenizer.VersionV1)
+}
+
+func (p *Properties) string(unformatted bool, version tokenizer.Version) string {
 	b := make([]byte, 0, len(p.order)*(1+8+1+8))
 	for _, k := range p.order {
 		v := p.props[k]
 		b = append(b, ' ')
-		if len(k) > 0 && tokenizer.IsBareIdentifier(k, 0) {
+		if len(k) > 0 && tokenizer.IsBareIdentifierVersion(k, 0, version) {
 			b = append(b, k...)
 		} else {
 			b = AppendQuotedString(b, k, '"')
 		}
 		b = append(b, '=')
-		b = append(b, v.FormattedString()...)
+		if unformatted {
+			if version == tokenizer.VersionV2 {
+				b = append(b, v.UnformattedStringV2()...)
+			} else {
+				b = append(b, v.UnformattedString()...)
+			}
+		} else {
+			if version == tokenizer.VersionV2 {
+				b = append(b, v.FormattedStringV2()...)
+			} else {
+				b = append(b, v.FormattedString()...)
+			}
+		}
 	}
 	return string(b)
 }
 
 func (p *Properties) UnformattedString() string {
-	b := make([]byte, 0, len(p.order)*(1+8+1+8))
-	for _, k := range p.order {
-		v := p.props[k]
-		b = append(b, ' ')
-		if len(k) > 0 && tokenizer.IsBareIdentifier(k, 0) {
-			b = append(b, k...)
-		} else {
-			b = AppendQuotedString(b, k, '"')
-		}
-		b = append(b, '=')
-		b = append(b, v.UnformattedString()...)
-	}
-	return string(b)
+	return p.string(true, tokenizer.VersionV1)
+}
+
+func (p *Properties) StringV2() string {
+	return p.string(false, tokenizer.VersionV2)
+}
+
+func (p *Properties) UnformattedStringV2() string {
+	return p.string(true, tokenizer.VersionV2)
 }
 
 func (p Properties) AppendTo(b []byte) []byte {
@@ -90,7 +102,7 @@ func (p Properties) AppendTo(b []byte) []byte {
 	for _, k := range p.order {
 		v := p.props[k]
 		b = append(b, ' ')
-		if len(k) > 0 && tokenizer.IsBareIdentifier(k, 0) {
+		if len(k) > 0 && tokenizer.IsBareIdentifierVersion(k, 0, tokenizer.VersionV1) {
 			b = append(b, k...)
 		} else {
 			b = AppendQuotedString(b, k, '"')

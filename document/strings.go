@@ -2,8 +2,10 @@ package document
 
 import (
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -207,7 +209,26 @@ func AppendUnquotedString(b []byte, s string, quote byte) ([]byte, error) {
 				}
 				c = s[i]
 
+				if isWhitespaceEscapeChar(c) {
+					var consumed bool
+					for i < lenS {
+						r, size := utf8.DecodeRuneInString(s[i:])
+						if !isWhitespaceEscapeRune(r) {
+							break
+						}
+						consumed = true
+						i += uint(size)
+					}
+					if !consumed {
+						return b, ErrInvalid
+					}
+					start = i
+					continue
+				}
+
 				switch c {
+				case quote, '\\':
+					b = append(b, c)
 				case 'n':
 					b = append(b, '\n')
 				case 'r':
@@ -218,6 +239,9 @@ func AppendUnquotedString(b []byte, s string, quote byte) ([]byte, error) {
 					b = append(b, '\b')
 				case 'f':
 					b = append(b, '\f')
+				case 's':
+					// KDL v2: \s is a space character
+					b = append(b, ' ')
 				case 'u':
 					// make sure we have enough room for `{n}`
 					if i+3 >= lenS || s[i+1] != '{' {
@@ -247,9 +271,14 @@ func AppendUnquotedString(b []byte, s string, quote byte) ([]byte, error) {
 					if r > 0x10FFFF {
 						return b, ErrInvalid
 					}
+					if r >= 0xD800 && r <= 0xDFFF {
+						return b, ErrInvalid
+					}
 					b = utf8.AppendRune(b, r)
-				default:
+				case '/':
 					b = append(b, c)
+				default:
+					return b, ErrInvalid
 				}
 				i++
 				start = i
@@ -269,40 +298,441 @@ func AppendUnquotedString(b []byte, s string, quote byte) ([]byte, error) {
 	return b, nil
 }
 
-func rawString(s string) string {
-	b := make([]byte, 0, 1+8*2+len(s))
-	return string(AppendRawString(b, s))
+func isWhitespaceEscapeChar(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\r' || c == '\n'
 }
 
-// AppendRawString appends s, quoted for use as a KDL RawString, to b and returns the expanded buffer.
-func AppendRawString(b []byte, s string) []byte {
-	// inelegant brute force approach because generation is not something I really care about at this point
-	marker := append(make([]byte, 0, 64), '"')
-	ok := false
-	for i := 0; i < cap(marker); i++ {
-		if !strings.Contains(s, string(marker)) {
-			ok = true
-			break
+func isWhitespaceEscapeRune(r rune) bool {
+	return unicode.IsSpace(r)
+}
+
+func rawString(s string) string {
+	b := make([]byte, 0, 1+8*2+len(s))
+	return string(AppendRawString(b, s, -1))
+}
+
+// AppendRawString appends s, quoted for use as a KDL v1 RawString (r#"..."#), to b and returns the expanded buffer.
+// If hashCount is -1, the minimum number of hashes required to quote s will be used.
+func AppendRawString(b []byte, s string, hashCount int) []byte {
+	if hashCount < 0 {
+		hashes := append(make([]byte, 0, 64), '#')
+		ok := false
+		for i := 0; i < cap(hashes); i++ {
+			terminator := `"` + string(hashes)
+			if !strings.Contains(s, terminator) {
+				ok = true
+				break
+			}
+			hashes = append(hashes, '#')
 		}
-		marker = append(marker, '#')
-	}
-	if !ok {
-		marker = append(marker, "r\"invalid\""...)
-		return marker
+		if !ok {
+			return append(b, "r\"invalid\""...)
+		}
+		hashCount = len(hashes) - 1
 	}
 
-	minSpace := 1 + len(marker)*2 + len(s)
+	minSpace := 1 + hashCount + 1 + len(s) + 1 + hashCount
 	if cap(b)-len(b) < minSpace {
 		n := make([]byte, 0, len(b)+minSpace)
 		n = append(n, b...)
 		b = n
 	}
 	b = append(b, 'r')
-	for i := 0; i < len(marker)-1; i++ {
+	for i := 0; i < hashCount; i++ {
 		b = append(b, '#')
 	}
 	b = append(b, '"')
 	b = append(b, s...)
-	b = append(b, marker...)
+	b = append(b, '"')
+	for i := 0; i < hashCount; i++ {
+		b = append(b, '#')
+	}
+	return b
+}
+
+// AppendRawStringV2 appends s, quoted for use as a KDL v2 RawString (#"..."#), to b and returns the expanded buffer.
+// If hashCount is -1, the minimum number of hashes required to quote s will be used.
+func AppendRawStringV2(b []byte, s string, hashCount int) []byte {
+	if hashCount < 0 {
+		hashes := append(make([]byte, 0, 64), '#')
+		ok := false
+		for i := 0; i < cap(hashes); i++ {
+			terminator := `"` + string(hashes)
+			if !strings.Contains(s, terminator) {
+				ok = true
+				break
+			}
+			hashes = append(hashes, '#')
+		}
+		if !ok {
+			return append(b, "\"invalid\""...)
+		}
+		hashCount = len(hashes) - 1
+	}
+
+	minSpace := hashCount + 1 + len(s) + 1 + hashCount
+	if cap(b)-len(b) < minSpace {
+		n := make([]byte, 0, len(b)+minSpace)
+		n = append(n, b...)
+		b = n
+	}
+	for i := 0; i < hashCount; i++ {
+		b = append(b, '#')
+	}
+	b = append(b, '"')
+	b = append(b, s...)
+	b = append(b, '"')
+	for i := 0; i < hashCount; i++ {
+		b = append(b, '#')
+	}
+	return b
+}
+
+// UnquoteMultiLineString parses a KDL v2 triple-quoted multi-line string ("""...""") and returns the
+// unescaped, dedented string content and the number of hashes used, or a non-nil error on failure.
+//
+// Processing rules per the KDL v2 spec:
+//  1. The opening """ must be followed by optional whitespace then a newline.
+//  2. The first newline (and preceding whitespace on the opening line) is stripped.
+//  3. The indentation of the closing """ line defines the base indentation stripped from all content lines.
+//  4. Escape sequences are processed as in regular quoted strings.
+func UnquoteMultiLineString(s string) (string, int, error) {
+	const delim = `"""`
+
+	// check for Raw Triple-Quoted Strings (#"""..."""#)
+	hashCount := 0
+	for hashCount < len(s) && s[hashCount] == '#' {
+		hashCount++
+	}
+
+	if hashCount > 0 {
+		suffix := delim + strings.Repeat("#", hashCount)
+		if !strings.HasPrefix(s[hashCount:], delim) || !strings.HasSuffix(s, suffix) {
+			return "", 0, ErrInvalid
+		}
+		s = s[hashCount : len(s)-hashCount]
+	}
+
+	if len(s) < 6 || s[:3] != delim || s[len(s)-3:] != delim {
+		return "", 0, ErrInvalid
+	}
+
+	inner := s[3 : len(s)-3]
+
+	openingLineEnd, openingNewlineLen := firstNewline(inner)
+	if openingLineEnd == -1 {
+		return "", 0, ErrInvalid
+	}
+	if !isInlineWhitespaceOnly(inner[:openingLineEnd]) {
+		return "", 0, fmt.Errorf("non-whitespace content after opening triple-quote")
+	}
+	inner = inner[openingLineEnd+openingNewlineLen:]
+
+	content, indent, closingEscaped, err := parseMultilineTail(inner)
+	if err != nil {
+		return "", 0, err
+	}
+	if !isInlineWhitespaceOnly(indent) {
+		return "", 0, fmt.Errorf("non-whitespace content on closing line of triple-quoted string")
+	}
+
+	dedented, err := dedentMultilineContent(content, indent)
+	if err != nil {
+		return "", 0, err
+	}
+	if hashCount > 0 {
+		return dedented, hashCount, nil
+	}
+	if closingEscaped {
+		dedented += `\`
+	}
+
+	b := make([]byte, 0, len(dedented))
+	b, err = appendUnquotedMultilineContent(b, dedented, closingEscaped)
+	return string(b), hashCount, err
+}
+
+func parseMultilineClosingEscape(s string) (int, bool) {
+	for i, r := range s {
+		if r == '\\' {
+			if !isInlineWhitespaceOnly(s[:i]) || !isInlineWhitespaceOnly(s[i+1:]) {
+				return 0, false
+			}
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+func parseMultilineTail(inner string) (content string, indent string, closingEscaped bool, err error) {
+	closingLineStart, closingNewlineLen := lastNewline(inner)
+	if closingLineStart == -1 {
+		if idx, ok := parseMultilineClosingEscape(inner); ok {
+			return "", inner[:idx], true, nil
+		}
+		return "", inner, false, nil
+	}
+
+	closingLine := inner[closingLineStart+closingNewlineLen:]
+	prefix := inner[:closingLineStart]
+	if idx, ok := parseMultilineClosingEscape(closingLine); ok {
+		return prefix, closingLine[:idx], true, nil
+	}
+	if !isInlineWhitespaceOnly(closingLine) {
+		return "", "", false, fmt.Errorf("non-whitespace content on closing line of triple-quoted string")
+	}
+
+	prevLineStart, prevNewlineLen := lastNewline(prefix)
+	prevLine := prefix
+	prevPrefix := ""
+	if prevLineStart != -1 {
+		prevLine = prefix[prevLineStart+prevNewlineLen:]
+		prevPrefix = prefix[:prevLineStart]
+	}
+	if idx, ok := parseMultilineClosingEscape(prevLine); ok {
+		return prevPrefix, prevLine[:idx], true, nil
+	}
+	return prefix, closingLine, false, nil
+}
+
+func firstNewline(s string) (int, int) {
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '\n':
+			return i, 1
+		case '\r':
+			if i+1 < len(s) && s[i+1] == '\n' {
+				return i, 2
+			}
+			return i, 1
+		}
+	}
+	return -1, 0
+}
+
+func lastNewline(s string) (int, int) {
+	for i := len(s) - 1; i >= 0; i-- {
+		switch s[i] {
+		case '\n':
+			if i > 0 && s[i-1] == '\r' {
+				return i - 1, 2
+			}
+			return i, 1
+		case '\r':
+			return i, 1
+		}
+	}
+	return -1, 0
+}
+
+func isInlineWhitespaceOnly(s string) bool {
+	for _, r := range s {
+		if r == '\n' || r == '\r' {
+			return false
+		}
+		if !unicode.IsSpace(r) {
+			return false
+		}
+	}
+	return true
+}
+
+func dedentMultilineContent(content string, indent string) (string, error) {
+	if content == "" {
+		return "", nil
+	}
+
+	var result strings.Builder
+	continued := false
+	for len(content) > 0 {
+		lineEnd, newlineLen := firstNewline(content)
+		line := content
+		newline := ""
+		if lineEnd != -1 {
+			line = content[:lineEnd]
+			newline = content[lineEnd : lineEnd+newlineLen]
+			content = content[lineEnd+newlineLen:]
+		} else {
+			content = ""
+		}
+
+		if strings.TrimSpace(line) == "" {
+			result.WriteString(newline)
+			continued = hasLineContinuation(line)
+			continue
+		}
+		if !continued && !strings.HasPrefix(line, indent) {
+			return "", fmt.Errorf("line in triple-quoted string has insufficient indentation")
+		}
+		if continued {
+			result.WriteString(line)
+		} else {
+			result.WriteString(line[len(indent):])
+		}
+		result.WriteString(newline)
+		continued = hasLineContinuation(line)
+	}
+	return result.String(), nil
+}
+
+func hasLineContinuation(line string) bool {
+	end := len(line)
+	for end > 0 {
+		r, size := utf8.DecodeLastRuneInString(line[:end])
+		if !unicode.IsSpace(r) {
+			return r == '\\'
+		}
+		end -= size
+	}
+	return false
+}
+
+// appendUnquotedContent processes escape sequences in raw string content (no surrounding quotes).
+func appendUnquotedContent(b []byte, s string) ([]byte, error) {
+	// wrap in quotes so we can reuse AppendUnquotedString
+	quoted := `"` + s + `"`
+	return AppendUnquotedString(b, quoted, '"')
+}
+
+func appendUnquotedMultilineContent(b []byte, s string, allowTrailingEscape bool) ([]byte, error) {
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		if r != '\\' {
+			b = utf8.AppendRune(b, r)
+			i += size
+			continue
+		}
+
+		i += size
+		if i >= len(s) {
+			if allowTrailingEscape {
+				return b, nil
+			}
+			return b, ErrInvalid
+		}
+
+		r, size = utf8.DecodeRuneInString(s[i:])
+		if unicode.IsSpace(r) {
+			for i < len(s) {
+				r, size = utf8.DecodeRuneInString(s[i:])
+				if !unicode.IsSpace(r) {
+					break
+				}
+				i += size
+			}
+			continue
+		}
+
+		switch r {
+		case 'n':
+			b = append(b, '\n')
+		case 'r':
+			b = append(b, '\r')
+		case 't':
+			b = append(b, '\t')
+		case 'b':
+			b = append(b, '\b')
+		case 'f':
+			b = append(b, '\f')
+		case 's':
+			b = append(b, ' ')
+		case '"', '\\':
+			b = append(b, byte(r))
+		case 'u':
+			if i+size >= len(s) || s[i+size] != '{' {
+				return b, ErrInvalid
+			}
+			j := i + size + 1
+			start := j
+			for j < len(s) && s[j] != '}' {
+				j++
+			}
+			if j >= len(s) || j-start > 6 {
+				return b, ErrInvalid
+			}
+			rn := rune(0)
+			factor := rune(1)
+			for k := j - 1; k >= start; k-- {
+				rn += hexTable[s[k]] * factor
+				factor *= 16
+			}
+			if rn > 0x10FFFF || (rn >= 0xD800 && rn <= 0xDFFF) {
+				return b, ErrInvalid
+			}
+			b = utf8.AppendRune(b, rn)
+			i = j + 1
+			continue
+		default:
+			return b, ErrInvalid
+		}
+		i += size
+	}
+	return b, nil
+}
+
+// AppendMultiLineString appends s, quoted for use as a KDL v2 multi-line string ("""..."""), to b and returns the expanded buffer.
+func AppendMultiLineString(b []byte, s string) []byte {
+	b = append(b, '"', '"', '"', '\n')
+
+	// we use a simplified version of AppendQuotedString that doesn't escape newlines
+	// and doesn't add surrounding quotes
+	lines := strings.Split(s, "\n")
+	for i, line := range lines {
+		// we wrap each line in quotes temporarily to reuse AppendQuotedString's core logic
+		// then strip the quotes
+		var lineBuf []byte
+		lineBuf = AppendQuotedString(lineBuf, line, '"')
+		if len(lineBuf) >= 2 {
+			b = append(b, lineBuf[1:len(lineBuf)-1]...)
+		}
+		if i < len(lines)-1 {
+			b = append(b, '\n')
+		}
+	}
+
+	b = append(b, '"', '"', '"')
+	return b
+}
+
+// AppendMultiLineStringV2 appends s, quoted for use as a KDL v2 raw triple-quoted string (#"""..."""#), to b and returns the expanded buffer.
+// If hashCount is -1, it will use the minimum hashes required (at least 1).
+func AppendMultiLineStringV2(b []byte, s string, hashCount int) []byte {
+	if hashCount < 0 {
+		hashes := append(make([]byte, 0, 64), '#')
+		ok := false
+		for i := 0; i < cap(hashes); i++ {
+			terminator := `"""` + string(hashes)
+			if !strings.Contains(s, terminator) {
+				ok = true
+				break
+			}
+			hashes = append(hashes, '#')
+		}
+		if !ok {
+			return append(b, "\"\"\"invalid\"\"\""...)
+		}
+		hashCount = len(hashes)
+	}
+	if hashCount == 0 {
+		hashCount = 1
+	}
+	minSpace := hashCount + 3 + 1 + len(s) + 3 + hashCount
+	if cap(b)-len(b) < minSpace {
+		n := make([]byte, 0, len(b)+minSpace)
+		n = append(n, b...)
+		b = n
+	}
+	for i := 0; i < hashCount; i++ {
+		b = append(b, '#')
+	}
+	b = append(b, '"', '"', '"', '\n')
+	b = append(b, s...)
+	if len(s) > 0 && s[len(s)-1] != '\n' {
+		b = append(b, '\n')
+	}
+	b = append(b, '"', '"', '"')
+	for i := 0; i < hashCount; i++ {
+		b = append(b, '#')
+	}
 	return b
 }

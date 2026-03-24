@@ -18,8 +18,8 @@ type stateTransitionFunc func(*ParseContext, tokenizer.Token) error
 var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc{
 	stateDocument: {
 		tokenizer.Whitespace: func(c *ParseContext, t tokenizer.Token) error {
-			// cannot insert whitespace immediately after type annotation, for... reasons
-			if c.typeAnnot.Valid() {
+			// cannot insert whitespace immediately after type annotation in v1, for... reasons
+			if c.typeAnnot.Valid() && c.opts.Version != tokenizer.VersionV2 {
 				return fmt.Errorf("unexpected %s in state %s", t.ID, c.state)
 			}
 			return nil
@@ -68,7 +68,7 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			return nil
 		},
 		tokenizer.ClassComment: func(c *ParseContext, t tokenizer.Token) error {
-			if c.typeAnnot.Valid() {
+			if c.typeAnnot.Valid() && c.opts.Version != tokenizer.VersionV2 {
 				return fmt.Errorf("unexpected %s in state %s", t.ID, c.state)
 			}
 			if c.opts.Flags.Has(ParseComments) {
@@ -78,20 +78,28 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			return nil
 		},
 		tokenizer.TokenComment: func(c *ParseContext, t tokenizer.Token) error {
+			if c.typeAnnot.Valid() {
+				return fmt.Errorf("unexpected %s in state %s", t.ID, c.state)
+			}
+			c.markIgnoreFromContinuation()
 			c.ignoreNextNode = true
+			return nil
+		},
+		tokenizer.Continuation: func(c *ParseContext, t tokenizer.Token) error {
+			c.startContinuation()
 			return nil
 		},
 	},
 	stateChildren: {
 		tokenizer.Whitespace: func(c *ParseContext, t tokenizer.Token) error {
-			// cannot insert whitespace immediately after type annotation, for... reasons
-			if c.typeAnnot.Valid() {
+			// cannot insert whitespace immediately after type annotation in v1, for... reasons
+			if c.typeAnnot.Valid() && c.opts.Version != tokenizer.VersionV2 {
 				return fmt.Errorf("unexpected %s in state %s", t.ID, c.state)
 			}
 			return nil
 		},
 		tokenizer.ClassComment: func(c *ParseContext, t tokenizer.Token) error {
-			if c.typeAnnot.Valid() {
+			if c.typeAnnot.Valid() && c.opts.Version != tokenizer.VersionV2 {
 				return fmt.Errorf("unexpected %s in state %s", t.ID, c.state)
 			}
 
@@ -102,7 +110,15 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			}
 			return nil
 		},
+		tokenizer.Continuation: func(c *ParseContext, t tokenizer.Token) error {
+			c.startContinuation()
+			return nil
+		},
 		tokenizer.TokenComment: func(c *ParseContext, t tokenizer.Token) error {
+			if c.typeAnnot.Valid() {
+				return fmt.Errorf("unexpected %s in state %s", t.ID, c.state)
+			}
+			c.markIgnoreFromContinuation()
 			c.ignoreNextNode = true
 			return nil
 		},
@@ -145,8 +161,15 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			return nil
 		},
 		tokenizer.BraceClose: func(c *ParseContext, t tokenizer.Token) error {
+			if c.ignoreNextNode {
+				return fmt.Errorf("unexpected %s in state %s", t.ID, c.state)
+			}
 			if c.ignoreChildren > 0 {
 				c.ignoreChildren--
+				if c.ignoreChildren == 0 {
+					c.afterIgnoredChildBlock = !c.ignoreChildBlockFromContinuation
+					c.ignoreChildBlockFromContinuation = false
+				}
 			}
 
 			if c.opts.Flags.Has(ParseComments) {
@@ -167,6 +190,25 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 	},
 
 	stateTypeAnnot: {
+		tokenizer.Whitespace: func(c *ParseContext, t tokenizer.Token) error {
+			if c.opts.Version != tokenizer.VersionV2 {
+				return fmt.Errorf("unexpected %s in state %s", t.ID, c.state)
+			}
+			return nil
+		},
+		tokenizer.ClassComment: func(c *ParseContext, t tokenizer.Token) error {
+			if c.opts.Version != tokenizer.VersionV2 {
+				return fmt.Errorf("unexpected %s in state %s", t.ID, c.state)
+			}
+			return nil
+		},
+		tokenizer.Continuation: func(c *ParseContext, t tokenizer.Token) error {
+			if c.opts.Version != tokenizer.VersionV2 {
+				return fmt.Errorf("unexpected %s in state %s", t.ID, c.state)
+			}
+			c.startContinuation()
+			return nil
+		},
 		tokenizer.BareIdentifier: func(c *ParseContext, t tokenizer.Token) error {
 			c.typeAnnot = t
 			c.state = stateTypeDone
@@ -179,6 +221,25 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 		},
 	},
 	stateTypeDone: {
+		tokenizer.Whitespace: func(c *ParseContext, t tokenizer.Token) error {
+			if c.opts.Version != tokenizer.VersionV2 {
+				return fmt.Errorf("unexpected %s in state %s", t.ID, c.state)
+			}
+			return nil
+		},
+		tokenizer.ClassComment: func(c *ParseContext, t tokenizer.Token) error {
+			if c.opts.Version != tokenizer.VersionV2 {
+				return fmt.Errorf("unexpected %s in state %s", t.ID, c.state)
+			}
+			return nil
+		},
+		tokenizer.Continuation: func(c *ParseContext, t tokenizer.Token) error {
+			if c.opts.Version != tokenizer.VersionV2 {
+				return fmt.Errorf("unexpected %s in state %s", t.ID, c.state)
+			}
+			c.startContinuation()
+			return nil
+		},
 		tokenizer.ParensClose: func(c *ParseContext, t tokenizer.Token) error {
 			_, err := c.popState()
 			return err
@@ -205,11 +266,38 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 				return fmt.Errorf("unexpected %s in state %s", t.ID, c.state)
 			}
 		},
+		tokenizer.BraceOpen: func(c *ParseContext, t tokenizer.Token) error {
+			if c.ignoreNextNode || c.ignoreChildren > 0 {
+				c.ignoreChildBlockFromContinuation = c.ignoreFromContinuation
+				c.ignoreFromContinuation = false
+				c.ignoreNextNode = false
+				c.ignoreChildren++
+			}
+			c.pushState(stateChildren)
+			return nil
+		},
+		tokenizer.Continuation: func(c *ParseContext, t tokenizer.Token) error {
+			c.startContinuation()
+			return nil
+		},
+		tokenizer.ClassComment: func(c *ParseContext, t tokenizer.Token) error {
+			if c.opts.Version == tokenizer.VersionV2 {
+				return nil
+			}
+			return fmt.Errorf("unexpected %s in state %s", t.ID, c.state)
+		},
+		tokenizer.BraceClose: func(c *ParseContext, t tokenizer.Token) error {
+			_, _, err := c.popNodeAndState()
+			if err != nil {
+				return err
+			}
+			return ErrReenterState
+		},
 	},
 	stateNodeParams: {
 		tokenizer.Whitespace: func(c *ParseContext, t tokenizer.Token) error {
-			// cannot insert whitespace immediately after type annotation, for... reasons
-			if c.typeAnnot.Valid() {
+			// cannot insert whitespace immediately after type annotation in v1, for... reasons
+			if c.typeAnnot.Valid() && c.opts.Version != tokenizer.VersionV2 {
 				return fmt.Errorf("unexpected %s in state %s", t.ID, c.state)
 			}
 			return nil
@@ -223,22 +311,29 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			}
 		},
 		tokenizer.TokenComment: func(c *ParseContext, t tokenizer.Token) error {
+			if c.typeAnnot.Valid() {
+				return fmt.Errorf("unexpected %s in state %s", t.ID, c.state)
+			}
+			c.markIgnoreFromContinuation()
 			c.ignoreNextArgProp = true
 			return nil
 		},
-		tokenizer.MultiLineComment: func(c *ParseContext, t tokenizer.Token) error {
-			// cannot insert comment immediately after type annotation, for... reasons
-			if c.typeAnnot.Valid() {
+		tokenizer.ClassComment: func(c *ParseContext, t tokenizer.Token) error {
+			// cannot insert comment immediately after type annotation in v1, for... reasons
+			if c.typeAnnot.Valid() && c.opts.Version != tokenizer.VersionV2 {
 				return fmt.Errorf("unexpected %s in state %s", t.ID, c.state)
 			}
 			return nil
 		},
 		tokenizer.SingleLineComment: func(c *ParseContext, t tokenizer.Token) error {
+			if c.ignoreNextArgProp {
+				return nil
+			}
 			c.state = stateNodeEnd
 			return nil
 		},
 		tokenizer.Continuation: func(c *ParseContext, t tokenizer.Token) error {
-			c.continuation = true
+			c.startContinuation()
 			return nil
 		},
 		tokenizer.ParensOpen: func(c *ParseContext, t tokenizer.Token) error {
@@ -247,8 +342,8 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			return nil
 		},
 		tokenizer.BareIdentifier: func(c *ParseContext, t tokenizer.Token) error {
-			if c.opts.RelaxedNonCompliant.Permit(relaxed.NGINXSyntax) {
-				// a bare identifier inside a node declaration in nginx syntax mode is either an argument or a property name; save it
+			if c.opts.RelaxedNonCompliant.Permit(relaxed.NGINXSyntax) || c.opts.Version == tokenizer.VersionV2 {
+				// a bare identifier inside a node declaration in nginx syntax mode or KDL v2 is either an argument or a property name; save it
 				c.ident = t
 				c.state = stateArgProp
 			} else {
@@ -259,6 +354,14 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 
 			return nil
 		},
+		tokenizer.BraceClose: func(c *ParseContext, t tokenizer.Token) error {
+			_, _, err := c.popNodeAndState()
+			if err != nil {
+				return err
+			}
+			return ErrReenterState
+		},
+
 		tokenizer.SuffixedDecimal: func(c *ParseContext, t tokenizer.Token) error {
 			// a suffixed identifier inside a node declaration can only be an argument
 			c.typeAnnot.Clear()
@@ -298,6 +401,8 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 		},
 		tokenizer.BraceOpen: func(c *ParseContext, t tokenizer.Token) error {
 			if c.ignoreNextArgProp || c.ignoreChildren > 0 {
+				c.ignoreChildBlockFromContinuation = c.ignoreFromContinuation
+				c.ignoreFromContinuation = false
 				c.ignoreNextArgProp = false
 				c.ignoreChildren++
 			}
@@ -307,6 +412,11 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 		tokenizer.ClassTerminator: func(c *ParseContext, t tokenizer.Token) error {
 			if c.continuation {
 				return nil
+			} else if c.ignoreNextArgProp {
+				if t.ID == tokenizer.Newline {
+					return nil
+				}
+				return fmt.Errorf("unexpected %s in state %s", t.ID, c.state)
 			} else if c.typeAnnot.Valid() {
 				return fmt.Errorf("expected value after type, found %s in state %s", t.ID, c.state)
 			} else {
@@ -321,6 +431,7 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 		},
 		tokenizer.ClassEndOfLine: func(c *ParseContext, t tokenizer.Token) error {
 			if c.continuation {
+				c.stopContinuation()
 				c.state = stateNodeParams
 				return nil
 			} else {
@@ -340,18 +451,33 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			c.state = statePropertyValue
 			return nil
 		},
+		tokenizer.BraceClose: func(c *ParseContext, t tokenizer.Token) error {
+			_, _, err := c.popNodeAndState()
+			if err != nil {
+				return err
+			}
+			return ErrReenterState
+		},
 	},
 	stateArgProp: {
 		tokenizer.TokenComment: func(c *ParseContext, t tokenizer.Token) error {
 			if c.ignoreNextArgProp {
 				c.ignoreNextArgProp = false
-			} else if err := c.currentNode().AddArgumentToken(c.ident, c.typeAnnot); err != nil {
-				return err
+			} else if c.ident.Valid() {
+				if err := c.currentNode().AddArgumentToken(c.ident, c.typeAnnot); err != nil {
+					return err
+				}
 			}
-			c.typeAnnot.Clear()
-			c.ident.Clear()
+			if c.ident.Valid() {
+				c.typeAnnot.Clear()
+				c.ident.Clear()
+			} else if c.typeAnnot.Valid() {
+				return fmt.Errorf("expected value after type, found %s in state %s", t.ID, c.state)
+			}
 
 			c.ignoreNextArgProp = true
+			c.markIgnoreFromContinuation()
+			c.state = stateNodeParams
 			return nil
 		},
 
@@ -389,6 +515,10 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 		},
 
 		tokenizer.Whitespace: func(c *ParseContext, p tokenizer.Token) error {
+			if c.opts.Version == tokenizer.VersionV2 {
+				return nil
+			}
+
 			// whitespace indicates it was definitely an arg, not a prop
 			if c.ignoreNextArgProp {
 				c.ignoreNextArgProp = false
@@ -402,7 +532,22 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			return nil
 		},
 
+		tokenizer.ClassComment: func(c *ParseContext, t tokenizer.Token) error {
+			if c.opts.Version == tokenizer.VersionV2 {
+				return nil
+			}
+			return fmt.Errorf("unexpected %s in state %s", t.ID, c.state)
+		},
+
+		tokenizer.Continuation: func(c *ParseContext, t tokenizer.Token) error {
+			c.startContinuation()
+			return nil
+		},
+
 		tokenizer.ClassTerminator: func(c *ParseContext, t tokenizer.Token) error {
+			if c.continuation {
+				return nil
+			}
 			if c.ident.Valid() {
 				// if we're at the end of the node and have an identifier but didn't find an equal sign, it was just an argument
 				if c.ignoreNextArgProp {
@@ -432,8 +577,45 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			// c.state stays the same, because we're still determining if this is an arg or prop
 			return nil
 		},
+		tokenizer.BraceClose: func(c *ParseContext, t tokenizer.Token) error {
+			if c.ident.Valid() {
+				// if we're at the end of the node and have an identifier but didn't find an equal sign, it was just an argument
+				if c.ignoreNextArgProp {
+					c.ignoreNextArgProp = false
+				} else if err := c.currentNode().AddArgumentToken(c.ident, c.typeAnnot); err != nil {
+					return err
+				}
+				c.typeAnnot.Clear()
+				c.ident.Clear()
+			}
+
+			_, _, err := c.popNodeAndState()
+			if err != nil {
+				return err
+			}
+			return ErrReenterState
+		},
 	},
 	statePropertyValue: {
+		tokenizer.Whitespace: func(c *ParseContext, t tokenizer.Token) error {
+			if c.opts.Version != tokenizer.VersionV2 {
+				return fmt.Errorf("unexpected %s in state %s", t.ID, c.state)
+			}
+			return nil
+		},
+		tokenizer.ClassComment: func(c *ParseContext, t tokenizer.Token) error {
+			if c.opts.Version != tokenizer.VersionV2 {
+				return fmt.Errorf("unexpected %s in state %s", t.ID, c.state)
+			}
+			return nil
+		},
+		tokenizer.Continuation: func(c *ParseContext, t tokenizer.Token) error {
+			if c.opts.Version != tokenizer.VersionV2 {
+				return fmt.Errorf("unexpected %s in state %s", t.ID, c.state)
+			}
+			c.startContinuation()
+			return nil
+		},
 		tokenizer.ParensOpen: func(c *ParseContext, t tokenizer.Token) error {
 			// a ( inside a node declaration is hte beginning of a type annotation for a node
 			c.pushState(stateTypeAnnot)
@@ -449,6 +631,13 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			c.ident.Clear()
 			c.state = stateNode
 			return nil
+		},
+		tokenizer.BraceClose: func(c *ParseContext, t tokenizer.Token) error {
+			_, _, err := c.popNodeAndState()
+			if err != nil {
+				return err
+			}
+			return ErrReenterState
 		},
 	},
 }

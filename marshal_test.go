@@ -215,10 +215,8 @@ father "\"Bob\""
 mother "\"Jane\""
 `
 
-	kdlOutputMarshalKDLNode = `
-father "BOB" "JOHNSON" age=32 active=true
-mother "JANE" "JOHNSON" age=28 active=true
-`
+	kdlOutputMarshalKDLNode = "father \"BOB\" \"JOHNSON\" active=true age=32\n" +
+		"mother \"JANE\" \"JOHNSON\" active=true age=28\n"
 
 	kdlOutputMarshalTextValue = `
 father firstname="BOB" lastname="JOHNSON"

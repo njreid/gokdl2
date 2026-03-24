@@ -28,20 +28,39 @@ type peeked struct {
 
 // Scanner implements a scanner for tokenizing a KDL input stream
 type Scanner struct {
-	Logger              func(string, ...interface{})
-	raw                 []byte
-	input               []byte
-	len                 int
-	peeked              []peeked
-	line                int
-	column              int
-	token               Token
-	err                 error
-	marks               []int
-	Alt                 bool
-	RelaxedNonCompliant relaxed.Flags
-	ParseComments       bool
-	r                   io.Reader
+	Logger                func(string, ...interface{})
+	raw                   []byte
+	input                 []byte
+	len                   int
+	peeked                []peeked
+	line                  int
+	column                int
+	token                 Token
+	err                   error
+	marks                 []int
+	Alt                   bool
+	RelaxedNonCompliant   relaxed.Flags
+	ParseComments         bool
+	Version               Version // VersionAuto, VersionV1, or VersionV2
+	versionMarkerDetected bool
+	r                     io.Reader
+	lastErr               error
+}
+
+func (s *Scanner) Read(p []byte) (n int, err error) {
+	if s.lastErr != nil {
+		return 0, s.lastErr
+	}
+	if len(s.input) == 0 {
+		s.refill()
+	}
+	if len(s.input) == 0 {
+		return 0, io.EOF
+	}
+	n = copy(p, s.input)
+	s.input = s.input[n:]
+	s.len -= n
+	return n, nil
 }
 
 // log records a log message if a logger has been configured
@@ -111,6 +130,55 @@ func (s *Scanner) peekTwoSize() (rune, int, rune, int, error) {
 	return s.peeked[0].c, s.peeked[0].size, s.peeked[1].c, s.peeked[1].size, nil
 }
 
+// peekThree is analogous to peek(), but returns the next three characters from the input buffer
+func (s *Scanner) peekThree() (rune, rune, rune, error) {
+	c1, _, c2, _, c3, _, err := s.peekThreeSize()
+	return c1, c2, c3, err
+}
+
+// peekThreeSize is analogous to peekSize(), but returns the next three characters from the input buffer and their sizes
+func (s *Scanner) peekThreeSize() (rune, int, rune, int, rune, int, error) {
+	c1, sz1, err := s.peekAtSize(0)
+	if err != nil {
+		return 0, 0, 0, 0, 0, 0, err
+	}
+	c2, sz2, err := s.peekAtSize(1)
+	if err != nil {
+		return c1, sz1, 0, 0, 0, 0, err
+	}
+	c3, sz3, err := s.peekAtSize(2)
+	return c1, sz1, c2, sz2, c3, sz3, err
+}
+
+// peekAt returns the character at the specified 0-based offset without consuming it
+func (s *Scanner) peekAt(n int) (rune, error) {
+	c, _, err := s.peekAtSize(n)
+	return c, err
+}
+
+// peekAtSize returns the character at the specified 0-based offset and its size
+func (s *Scanner) peekAtSize(n int) (rune, int, error) {
+	peekedSize := 0
+	for _, p := range s.peeked {
+		peekedSize += p.size
+	}
+	for len(s.peeked) <= n {
+		if s.len <= peekedSize {
+			s.refill()
+		}
+		c, size := utf8.DecodeRune(s.input[peekedSize:])
+		if size == 0 {
+			return 0, 0, io.EOF
+		}
+		if c == utf8.RuneError {
+			return 0, 0, ErrInvalidRune
+		}
+		peekedSize += size
+		s.peeked = append(s.peeked, peeked{c, size})
+	}
+	return s.peeked[n].c, s.peeked[n].size, nil
+}
+
 // get consumes and returns the next character from the input buffer; returns a non-nil error on failure
 func (s *Scanner) get() (rune, error) {
 	if s.len <= utf8.UTFMax*2 {
@@ -124,12 +192,9 @@ func (s *Scanner) get() (rune, error) {
 	if len(s.peeked) > 0 {
 		size = s.peeked[0].size
 		c = s.peeked[0].c
-		if len(s.peeked) == 1 {
-			s.peeked = s.peeked[:0]
-		} else {
-			s.peeked[0] = s.peeked[1]
-			s.peeked = s.peeked[0:1]
-		}
+		n := len(s.peeked) - 1
+		copy(s.peeked, s.peeked[1:])
+		s.peeked = s.peeked[:n]
 	} else {
 		c, size = utf8.DecodeRune(s.input)
 		if size == 0 {
@@ -206,8 +271,9 @@ func (s *Scanner) refill() {
 	remain := raw[retainLen:]
 	nr, err := io.ReadFull(s.r, remain)
 	if err != nil {
-		if err != io.ErrUnexpectedEOF {
+		if err != io.ErrUnexpectedEOF && err != io.EOF {
 			s.err = err
+			s.lastErr = err
 			s.r = nil
 			// fmt.Fprintf(os.Stderr, "REFILL: failed with error %v\n", err)
 			return
@@ -317,7 +383,7 @@ type staticScanner struct {
 
 var staticScan = staticScanner{
 	s: Scanner{
-		peeked: make([]peeked, 0, 2),
+		peeked: make([]peeked, 0, 4),
 		marks:  make([]int, 0, 8),
 	},
 }
@@ -334,11 +400,110 @@ func ScanOne(b []byte) (Token, error) {
 	return staticScan.s.readNext()
 }
 
+// detectVersion peeks at the start of the input for a /- kdl-version N marker and updates s.Version.
+func (s *Scanner) detectVersion() {
+	if s.versionMarkerDetected {
+		return
+	}
+
+	index := 0
+
+	// check for UTF-8 BOM
+	c, _, err := s.peekAtSize(index)
+	if err == nil && c == 0xFEFF {
+		index++
+	}
+
+	// /-
+	c, _, err = s.peekAtSize(index)
+	if err != nil || c != '/' {
+		if err == nil && c != 0 {
+			s.versionMarkerDetected = true
+		}
+		return
+	}
+	index++
+
+	c, _, err = s.peekAtSize(index)
+	if err != nil || c != '-' {
+		return
+	}
+	index++
+
+	// skip optional whitespace
+	for {
+		c, _, err = s.peekAtSize(index)
+		if err != nil || (c != ' ' && c != '	') {
+			break
+		}
+		index++
+	}
+
+	// check for "kdl-version"
+	const marker = "kdl-version"
+	for _, expected := range marker {
+		c, _, err = s.peekAtSize(index)
+		if err != nil || c != expected {
+			return
+		}
+		index++
+	}
+
+	// must be followed by at least one whitespace
+	c, _, err = s.peekAtSize(index)
+	if err != nil || (c != ' ' && c != '	') {
+		return
+	}
+	for {
+		c, _, err = s.peekAtSize(index)
+		if err != nil || (c != ' ' && c != '	') {
+			break
+		}
+		index++
+	}
+
+	// read version number
+	c, _, err = s.peekAtSize(index)
+	if err != nil {
+		return
+	}
+	index++
+
+	var version Version
+	switch c {
+	case '1':
+		version = VersionV1
+	case '2':
+		version = VersionV2
+	default:
+		return
+	}
+
+	// optional whitespace then newline or EOF
+	for {
+		c, _, err = s.peekAtSize(index)
+		if err != nil || (c != ' ' && c != '	') {
+			break
+		}
+		index++
+	}
+
+	c, _, err = s.peekAtSize(index)
+	if err == io.EOF || isNewline(c) {
+		s.Version = version
+		s.versionMarkerDetected = true
+	}
+}
+
 // readNext reads and returns the next token from the input buffer, or a non-nil error on failure
 func (s *Scanner) readNext() (Token, error) {
+	if s.Version == VersionAuto && !s.versionMarkerDetected {
+		s.detectVersion()
+	}
 	token := Token{
-		Line:   s.line,
-		Column: s.column,
+		Line:    s.line,
+		Column:  s.column,
+		Version: s.Version,
 	}
 
 	c, size, err := s.peekSize()
@@ -367,13 +532,20 @@ func (s *Scanner) readNext() (Token, error) {
 		'\u200A',
 		'\u202F',
 		'\u205F',
-		'\u3000',
-		// BOM
-		'\uFEFF':
+		'\u3000':
 		s.log("reading whitespace")
 		token.ID = Whitespace
 		token.Data = s.readWhitespace()
 		s.log("read whitespace")
+
+	case '\uFEFF':
+		if s.Offset() != 0 {
+			return token, fmt.Errorf("unexpected character %c", c)
+		}
+		s.log("reading leading bom")
+		token.ID = Whitespace
+		token.Data = s.copyInput(size)
+		s.skip()
 
 	case '\r':
 		s.log("reading carriage return")
@@ -388,7 +560,7 @@ func (s *Scanner) readNext() (Token, error) {
 			s.skip()
 		}
 
-	case '\n', '\u0085', '\u000c', '\u2028', '\u2029':
+	case '\n', '\u000b', '\u0085', '\u000c', '\u2028', '\u2029':
 		s.log("reading newline")
 		token.ID = Newline
 		token.Data = s.copyInput(size)
@@ -473,6 +645,8 @@ func (s *Scanner) readNext() (Token, error) {
 		token.ID = Semicolon
 		token.Data = s.copyInput(1)
 		s.skip()
+	case ',':
+		return token, fmt.Errorf("unexpected character ','")
 	case '\\':
 		if s.RelaxedNonCompliant.Permit(relaxed.NGINXSyntax) {
 			ignore = false
@@ -483,23 +657,37 @@ func (s *Scanner) readNext() (Token, error) {
 			s.skip()
 		}
 
-	case '+', '-': // sign
-		s.log("reading signed value")
-		_, c, err := s.peekTwo()
+	case '?', '+', '-': // sign or v2 identifier start
+		s.log("reading signed value or identifier", "c", c)
+		_, c2, err := s.peekTwo()
+		s.log("peeked c2", "c2", c2, "err", err)
 		if err != nil {
-			s.log("oh noes")
+			if err == io.EOF && c != '?' {
+				if token.ID, token.Data, err = s.readIdentifier(); err != nil {
+					return token, err
+				}
+				return token, nil
+			}
 			return token, err
 		}
-		if isDigit(c) {
+		if c == '?' {
+			s.log("calling readIdentifier for ?")
+			if token.ID, token.Data, err = s.readIdentifier(); err != nil {
+				return token, err
+			}
+		} else if isDigit(c2) {
+			s.log("calling readDecimal")
 			if token.ID, token.Data, err = s.readDecimal(); err != nil {
-				s.log("decimal oh noes")
 				return token, err
 			}
 		} else {
+			s.log("calling readIdentifier for sign")
 			if token.ID, token.Data, err = s.readIdentifier(); err != nil {
 				return token, err
 			}
 		}
+		s.log("got sign/ident token", "token", token)
+		return token, nil
 
 	case '0':
 		s.log("reading value starting with 0")
@@ -539,7 +727,17 @@ func (s *Scanner) readNext() (Token, error) {
 		}
 
 	default:
-		if c == '#' && s.RelaxedNonCompliant.Permit(relaxed.NGINXSyntax) {
+		if c == '.' && s.Version == VersionV2 {
+			if _, c2, err := s.peekTwo(); err == nil && isDigit(c2) {
+				return token, fmt.Errorf("unexpected character %c", c)
+			}
+		}
+		if c == '#' && s.Version == VersionV2 {
+			s.log("reading v2 hash token")
+			if token.ID, token.Data, err = s.readHashToken(); err != nil {
+				return token, err
+			}
+		} else if c == '#' && s.RelaxedNonCompliant.Permit(relaxed.NGINXSyntax) {
 			s.log("reading single line comment")
 			token.ID = SingleLineComment
 			token.Data, err = s.readSingleLineComment()
@@ -579,6 +777,15 @@ func (s *Scanner) Pos() (int, int) {
 // extractLineAtOffset returns a string containing the line at the specified offset in the input buffer, a newline, and
 // a caret positioned to indicate the current position in the input buffer
 func (s *Scanner) extractLineAtOffset(offset int) string {
+	if len(s.raw) == 0 {
+		return "^"
+	}
+	if offset >= len(s.raw) {
+		offset = len(s.raw) - 1
+	}
+	if offset < 0 {
+		offset = 0
+	}
 	start := offset
 	for start > 0 {
 		start--
@@ -657,7 +864,7 @@ func SimpleLogger(s string, v ...interface{}) {
 func newScanner() *Scanner {
 	return &Scanner{
 		Logger: nil,
-		peeked: make([]peeked, 0, 2),
+		peeked: make([]peeked, 0, 4),
 		marks:  make([]int, 0, 8),
 	}
 }
