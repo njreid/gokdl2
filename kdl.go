@@ -7,7 +7,24 @@ import (
 	"github.com/sblinch/kdl-go/internal/generator"
 	"github.com/sblinch/kdl-go/internal/parser"
 	"github.com/sblinch/kdl-go/internal/tokenizer"
+	"github.com/sblinch/kdl-go/relaxed"
 )
+
+// ParseVersion controls which KDL syntax version the public parser accepts.
+type ParseVersion int
+
+const (
+	// ParseVersionAuto tries KDL v2 first and falls back to v1 if v2 parsing fails.
+	ParseVersionAuto ParseVersion = ParseVersion(tokenizer.VersionAuto)
+	// ParseVersionV1 only accepts KDL v1 syntax.
+	ParseVersionV1 ParseVersion = ParseVersion(tokenizer.VersionV1)
+	// ParseVersionV2 only accepts KDL v2 syntax.
+	ParseVersionV2 ParseVersion = ParseVersion(tokenizer.VersionV2)
+)
+
+func (v ParseVersion) tokenizerVersion() tokenizer.Version {
+	return tokenizer.Version(v)
+}
 
 func parse(s *tokenizer.Scanner) (*document.Document, error) {
 	if s.Version != tokenizer.VersionAuto {
@@ -71,9 +88,18 @@ func parseOne(s *tokenizer.Scanner) (*document.Document, error) {
 	return doc, nil
 }
 
-type ParseOptions = parser.ParseContextOptions
+type ParseOptions struct {
+	// RelaxedNonCompliant enables optional non-standard parsing behaviors.
+	RelaxedNonCompliant relaxed.Flags
+	// ParseComments preserves comments in the parsed document.
+	ParseComments bool
+	// Version selects whether parsing is automatic, v1-only, or v2-only.
+	Version ParseVersion
+}
 
-var DefaultParseOptions = parser.ParseContextOptions{}
+var DefaultParseOptions = ParseOptions{
+	Version: ParseVersionAuto,
+}
 
 // Parse parses a KDL document from r and returns the parsed Document, or a non-nil error on failure
 func Parse(r io.Reader) (*document.Document, error) {
@@ -83,8 +109,8 @@ func Parse(r io.Reader) (*document.Document, error) {
 func ParseWithOptions(r io.Reader, opts ParseOptions) (*document.Document, error) {
 	s := tokenizer.New(r)
 	s.RelaxedNonCompliant = opts.RelaxedNonCompliant
-	s.ParseComments = opts.Flags.Has(parser.ParseComments)
-	s.Version = opts.Version
+	s.ParseComments = opts.ParseComments
+	s.Version = opts.Version.tokenizerVersion()
 	return parse(s)
 }
 
