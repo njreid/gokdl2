@@ -4,6 +4,15 @@ import (
 	"fmt"
 )
 
+// Version identifies the KDL spec version for parsing/generating.
+type Version int
+
+const (
+	VersionAuto Version = 0 // detect from version marker; fall back v2→v1
+	VersionV1   Version = 1
+	VersionV2   Version = 2
+)
+
 type TokenID int
 
 const (
@@ -24,6 +33,7 @@ const (
 	SuffixedDecimal
 	RawString
 	QuotedString
+	ExpressionString
 	BraceOpen
 	BraceClose
 	ParensOpen
@@ -32,6 +42,7 @@ const (
 	Semicolon
 	Continuation
 	EOF
+	Keyword // KDL v2: #inf, #-inf, #nan
 
 	ClassWhitespace
 	ClassValue
@@ -61,6 +72,7 @@ var tokenClasses = map[TokenID][]TokenID{
 	BareIdentifier:    {ClassValue, ClassIdentifier},
 	RawString:         {ClassValue, ClassString, ClassIdentifier},
 	QuotedString:      {ClassValue, ClassString, ClassIdentifier},
+	ExpressionString:  {ClassValue, ClassString},
 	BraceOpen:         {},
 	BraceClose:        {},
 	ParensOpen:        {},
@@ -69,6 +81,7 @@ var tokenClasses = map[TokenID][]TokenID{
 	Semicolon:         {ClassTerminator},
 	Continuation:      {},
 	EOF:               {ClassTerminator, ClassEndOfLine},
+	Keyword:           {ClassValue, ClassNonStringValue},
 }
 
 func (t TokenID) Classes() []TokenID {
@@ -109,6 +122,8 @@ func (t TokenID) String() string {
 		return "RawString"
 	case QuotedString:
 		return "FormattedString"
+	case ExpressionString:
+		return "ExpressionString"
 	case BraceOpen:
 		return "BraceOpen"
 	case BraceClose:
@@ -125,6 +140,8 @@ func (t TokenID) String() string {
 		return "Continuation"
 	case EOF:
 		return "EOF"
+	case Keyword:
+		return "Keyword"
 	default:
 		return "(invalid)"
 	}
@@ -136,9 +153,10 @@ type Token struct {
 	ID TokenID
 	// Data contains the literal data for the token; this may be a subslice of the input buffer (if the entire stream
 	// could be read into a single buffer) or a copy of data from the input buffer, so it should not be modified.
-	Data   []byte
-	Line   int
-	Column int
+	Data    []byte
+	Line    int
+	Column  int
+	Version Version // KDL version this token was scanned in
 }
 
 // String returns a string representation of the token for debugging
@@ -160,4 +178,5 @@ func (t *Token) Clear() {
 	t.ID = Unknown
 	t.Data = nil
 	t.Line, t.Column = 0, 0
+	t.Version = VersionAuto
 }

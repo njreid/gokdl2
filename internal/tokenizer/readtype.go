@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/sblinch/kdl-go/relaxed"
+	"github.com/njreid/gokdl2/relaxed"
 )
 
 // readWhitespace reads all whitespace starting from the current position. It does not return an error as in practice it
@@ -149,32 +149,48 @@ hashLoop:
 		}
 	}
 
-	foundQuote := false
-	endHashes := 0
+	if err := s.readRawStringContent(startHashes); err != nil {
+		return nil, err
+	}
+	return s.copyFromMark(), nil
+}
+
+// readRawStringContent reads the content of a raw string until the closing quote and hashes.
+func (s *Scanner) readRawStringContent(hashCount int) error {
 	for {
-		if c, err = s.get(); err != nil {
+		c, err := s.get()
+		if err != nil {
 			if err == io.EOF {
 				err = io.ErrUnexpectedEOF
 			}
-			return nil, err
+			return err
 		}
-		if foundQuote {
-			if c == '#' {
-				endHashes++
-				if endHashes == startHashes {
-					return s.copyFromMark(), nil
+
+		if c == '"' {
+			// potentially the end; check for hashCount hashes
+			matchedHashes := 0
+			for matchedHashes < hashCount {
+				next, err := s.peek()
+				if err != nil {
+					// EOF or other error while looking for hashes
+					break
 				}
-			} else if c == '"' {
-				endHashes = 0
-			} else {
-				foundQuote = false
-				endHashes = 0
+				if next != '#' {
+					break
+				}
+				s.skip()
+				matchedHashes++
 			}
-		} else if c == '"' {
-			foundQuote = true
-			if startHashes == 0 {
-				return s.copyFromMark(), nil
+
+			if matchedHashes == hashCount {
+				return nil
 			}
+			// not the end; some hashes matched but then we found something else
+			// (or no hashes were needed and we're done, but the loop handles that)
+		}
+
+		if s.Version == VersionV2 && isNewline(c) {
+			return fmt.Errorf("unexpected character %c", c)
 		}
 	}
 }
@@ -185,6 +201,10 @@ func (s *Scanner) readQuotedString() ([]byte, error) {
 
 func (s *Scanner) readSingleQuotedString() ([]byte, error) {
 	return s.readQuotedStringQ('\'')
+}
+
+func (s *Scanner) readExpressionString() ([]byte, error) {
+	return s.readQuotedStringQ('`')
 }
 
 // readQuotedString reads and returns a quoted string from the current position, or returns a non-nil error on failure.
@@ -204,6 +224,7 @@ func (s *Scanner) readQuotedStringQ(q rune) ([]byte, error) {
 	}
 
 	escaped := false
+	foldingWhitespace := false
 	done := false
 	first := true
 	return s.readWhile(func(c rune) bool {
@@ -215,8 +236,21 @@ func (s *Scanner) readQuotedStringQ(q rune) ([]byte, error) {
 		if done {
 			return false
 		}
+		if foldingWhitespace {
+			if isWhiteSpace(c) || isNewline(c) {
+				return true
+			}
+			foldingWhitespace = false
+		}
 		switch c {
 		case '\\':
+			if s.Version == VersionV2 {
+				next, err := s.peekAt(1)
+				if err == nil && next == '/' {
+					err = fmt.Errorf("unexpected character %c", next)
+					return false
+				}
+			}
 			escaped = !escaped
 		case q:
 			if escaped {
@@ -224,6 +258,21 @@ func (s *Scanner) readQuotedStringQ(q rune) ([]byte, error) {
 			} else {
 				done = true
 			}
+		case ' ', '\t':
+			if s.Version == VersionV2 && escaped {
+				escaped = false
+				foldingWhitespace = true
+			}
+		case '\n', '\r':
+			if s.Version != VersionV2 {
+				break
+			}
+			if !escaped {
+				err = fmt.Errorf("unexpected character %c", c)
+				return false
+			}
+			escaped = false
+			foldingWhitespace = true
 		default:
 			if escaped {
 				escaped = false
@@ -254,7 +303,10 @@ func (s *Scanner) readBareIdentifier() (TokenID, []byte, error) {
 	case '+', '-':
 		if _, c, err = s.peekTwo(); err != nil {
 			if err == io.EOF {
-				err = io.ErrUnexpectedEOF
+				literal, err := s.readWhile(func(r rune) bool {
+					return r == '+' || r == '-'
+				}, 1)
+				return BareIdentifier, literal, err
 			}
 			return Unknown, nil, err
 		}
@@ -262,7 +314,7 @@ func (s *Scanner) readBareIdentifier() (TokenID, []byte, error) {
 			return Unknown, nil, fmt.Errorf("unexpected character %c", c)
 		}
 	default:
-		if !isBareIdentifierStartChar(c, s.RelaxedNonCompliant) {
+		if !isBareIdentifierStartCharVersion(c, s.RelaxedNonCompliant, s.Version) {
 			return Unknown, nil, fmt.Errorf("unexpected character %c", c)
 		}
 	}
@@ -270,7 +322,7 @@ func (s *Scanner) readBareIdentifier() (TokenID, []byte, error) {
 	var literal []byte
 
 	isBareIdentifierCharClosure := func(c rune) bool {
-		return isBareIdentifierChar(c, s.RelaxedNonCompliant)
+		return isBareIdentifierCharVersion(c, s.RelaxedNonCompliant, false, s.Version)
 	}
 
 	if literal, err = s.readWhile(isBareIdentifierCharClosure, 1); err != nil {
@@ -278,13 +330,306 @@ func (s *Scanner) readBareIdentifier() (TokenID, []byte, error) {
 	}
 	tokenType := BareIdentifier
 
-	if string(literal) == "true" || string(literal) == "false" {
+	sLit := string(literal)
+	if s.Version == VersionV2 {
+		if sLit == "true" || sLit == "false" || sLit == "null" || sLit == "inf" || sLit == "-inf" || sLit == "nan" {
+			return Unknown, nil, fmt.Errorf("bare %q is not valid in KDL v2; use #%s", sLit, sLit)
+		}
+	}
+
+	if sLit == "true" || sLit == "false" {
 		tokenType = Boolean
-	} else if string(literal) == "null" {
+	} else if sLit == "null" {
 		tokenType = Null
 	}
 
 	return tokenType, literal, nil
+}
+
+// readHashToken reads a KDL v2 token beginning with '#': a keyword (#true, #false, #null, #inf, #-inf, #nan)
+// or a raw string (#"..."#).
+func (s *Scanner) readHashToken() (TokenID, []byte, error) {
+	s.pushMark()
+	defer s.popMark()
+
+	// consume '#'
+	if _, err := s.get(); err != nil {
+		return Unknown, nil, err
+	}
+
+	c, err := s.peek()
+	if err != nil {
+		if err == io.EOF {
+			err = io.ErrUnexpectedEOF
+		}
+		return Unknown, nil, err
+	}
+
+	switch {
+	case c == '"' || c == '#':
+		// v2 raw string: #"..."# or #"""..."""# etc.; first '#' already consumed
+		hashCount := 1
+		for {
+			next, err := s.peek()
+			if err != nil {
+				return Unknown, nil, io.ErrUnexpectedEOF
+			}
+			if next != '#' {
+				break
+			}
+			hashCount++
+			s.skip()
+		}
+
+		// check if it's a triple-quoted raw string
+		c1, c2, c3, err := s.peekThree()
+		if err == nil && c1 == '"' && c2 == '"' && c3 == '"' {
+			// leading hashes were already marked by readHashToken's caller or earlier
+			literal, err := s.readMultiLineStringRawNoMark(hashCount)
+			return QuotedString, literal, err
+		}
+
+		// next char must be '"' for regular raw string
+		next, err := s.peek()
+		if err != nil {
+			return Unknown, nil, io.ErrUnexpectedEOF
+		}
+		if next != '"' {
+			return Unknown, nil, fmt.Errorf("expected '\"' after '#' in raw string")
+		}
+		// consume '"'
+		s.skip()
+
+		if err := s.readRawStringContent(hashCount); err != nil {
+			return Unknown, nil, err
+		}
+		return RawString, s.copyFromMark(), nil
+
+	case c == 't':
+
+		// #true
+		for _, expected := range []rune("true") {
+			ch, err := s.get()
+			if err != nil {
+				return Unknown, nil, err
+			}
+			if ch != expected {
+				return Unknown, nil, fmt.Errorf("unexpected character %c", ch)
+			}
+		}
+		return Boolean, s.copyFromMark(), nil
+
+	case c == 'f':
+		// #false
+		for _, expected := range []rune("false") {
+			ch, err := s.get()
+			if err != nil {
+				return Unknown, nil, err
+			}
+			if ch != expected {
+				return Unknown, nil, fmt.Errorf("unexpected character %c", ch)
+			}
+		}
+		return Boolean, s.copyFromMark(), nil
+
+	case c == 'n':
+		// #null or #nan — peek 2nd char to distinguish
+		_, c2, err := s.peekTwo()
+		if err != nil {
+			return Unknown, nil, err
+		}
+		if c2 == 'u' {
+			for _, expected := range []rune("null") {
+				ch, err := s.get()
+				if err != nil {
+					return Unknown, nil, err
+				}
+				if ch != expected {
+					return Unknown, nil, fmt.Errorf("unexpected character %c", ch)
+				}
+			}
+			return Null, s.copyFromMark(), nil
+		}
+		for _, expected := range []rune("nan") {
+			ch, err := s.get()
+			if err != nil {
+				return Unknown, nil, err
+			}
+			if ch != expected {
+				return Unknown, nil, fmt.Errorf("unexpected character %c", ch)
+			}
+		}
+		return Keyword, s.copyFromMark(), nil
+
+	case c == 'i':
+		// #inf
+		for _, expected := range []rune("inf") {
+			ch, err := s.get()
+			if err != nil {
+				return Unknown, nil, err
+			}
+			if ch != expected {
+				return Unknown, nil, fmt.Errorf("unexpected character %c", ch)
+			}
+		}
+		return Keyword, s.copyFromMark(), nil
+
+	case c == '-':
+		// #-inf
+		for _, expected := range []rune("-inf") {
+			ch, err := s.get()
+			if err != nil {
+				return Unknown, nil, err
+			}
+			if ch != expected {
+				return Unknown, nil, fmt.Errorf("unexpected character %c", ch)
+			}
+		}
+		return Keyword, s.copyFromMark(), nil
+
+	default:
+		return Unknown, nil, fmt.Errorf("unexpected character %c after '#'", c)
+	}
+}
+
+// readMultiLineString reads a KDL v2 triple-quoted multi-line string ("""...""") from the current position.
+func (s *Scanner) readMultiLineString() ([]byte, error) {
+	return s.readMultiLineStringRaw(0)
+}
+
+// readMultiLineExpressionString reads a triple-backtick multi-line expression string from the current position.
+func (s *Scanner) readMultiLineExpressionString() ([]byte, error) {
+	s.pushMark()
+	defer s.popMark()
+
+	for i := 0; i < 3; i++ {
+		if _, err := s.get(); err != nil {
+			return nil, io.ErrUnexpectedEOF
+		}
+	}
+
+	for {
+		c, err := s.peek()
+		if err != nil {
+			return nil, io.ErrUnexpectedEOF
+		}
+		if c == ' ' || c == '\t' {
+			s.skip()
+			continue
+		}
+		if c == '\n' || c == '\r' {
+			break
+		}
+		return nil, fmt.Errorf("non-whitespace content after opening triple-backtick")
+	}
+
+	for {
+		c, err := s.get()
+		if err != nil {
+			if err == io.EOF {
+				err = io.ErrUnexpectedEOF
+			}
+			return nil, err
+		}
+
+		if c == '\\' {
+			if _, err := s.get(); err != nil {
+				return nil, io.ErrUnexpectedEOF
+			}
+			continue
+		}
+
+		if c == '`' {
+			c2, c3, err := s.peekTwo()
+			if err == nil && c2 == '`' && c3 == '`' {
+				s.skip()
+				s.skip()
+				return s.copyFromMark(), nil
+			}
+		}
+	}
+}
+
+// readMultiLineStringRaw reads a KDL v2 triple-quoted multi-line string with hashCount hashes ("""...""" or #"""..."""#).
+func (s *Scanner) readMultiLineStringRaw(hashCount int) ([]byte, error) {
+	s.pushMark()
+	defer s.popMark()
+	return s.readMultiLineStringRawNoMark(hashCount)
+}
+
+// readMultiLineStringRawNoMark is like readMultiLineStringRaw but does not push its own mark.
+func (s *Scanner) readMultiLineStringRawNoMark(hashCount int) ([]byte, error) {
+	// opening hashes were already consumed by readHashToken if hashCount > 0
+
+	// consume the opening """
+	for i := 0; i < 3; i++ {
+		if _, err := s.get(); err != nil {
+			return nil, io.ErrUnexpectedEOF
+		}
+	}
+
+	// must be followed by optional whitespace then a newline
+	for {
+		c, err := s.peek()
+		if err != nil {
+			return nil, io.ErrUnexpectedEOF
+		}
+		if c == ' ' || c == '\t' {
+			s.skip()
+			continue
+		}
+		if c == '\n' || c == '\r' {
+			// found the newline, now we can read the content
+			break
+		}
+		return nil, fmt.Errorf("non-whitespace content after opening triple-quote")
+	}
+
+	// read until we find the closing """ followed by hashCount hashes
+	for {
+		c, err := s.get()
+		if err != nil {
+			if err == io.EOF {
+				err = io.ErrUnexpectedEOF
+			}
+			return nil, err
+		}
+
+		if c == '\\' && hashCount == 0 {
+			// skip next char in standard multi-line strings
+			if _, err := s.get(); err != nil {
+				return nil, io.ErrUnexpectedEOF
+			}
+			continue
+		}
+
+		if c == '"' {
+			// potentially the end; check if we have two more quotes
+			c2, c3, err := s.peekTwo()
+			if err == nil && c2 == '"' && c3 == '"' {
+				s.skip() // 2nd "
+				s.skip() // 3rd "
+
+				// check for hashCount hashes
+				matchedHashes := 0
+				for matchedHashes < hashCount {
+					next, err := s.peek()
+					if err != nil {
+						break
+					}
+					if next != '#' {
+						break
+					}
+					s.skip()
+					matchedHashes++
+				}
+
+				if matchedHashes == hashCount {
+					return s.copyFromMark(), nil
+				}
+			}
+		}
+	}
 }
 
 // readIdentifier reads an identifier from the current position and returns a TokenID representing the identifier's
@@ -299,38 +644,42 @@ func (s *Scanner) readIdentifier() (TokenID, []byte, error) {
 		return Unknown, nil, fmt.Errorf("unexpected character %c", c)
 	}
 
-	// r.log("reading an identifier", "start-with", string(c), "second-char", string(c2))
 	switch c {
 	case 'r':
-		// r.log("maybe a raw string", "second-char", string(c2))
-		_, c2, err := s.peekTwo()
-		if err == nil && (c2 == '#' || c2 == '"') {
-			// r.log("fo sho a raw string, reading")
-			literal, err := s.readRawString()
-			return RawString, literal, err
-		} else {
-			// r.log("must be a bare identifier")
-			// possible bare identifier starting with 'r'
-			tokenType, literal, err := s.readBareIdentifier()
-			return tokenType, literal, err
+		if s.Version != VersionV2 {
+			_, c2, err := s.peekTwo()
+			if err == nil && (c2 == '#' || c2 == '"') {
+				literal, err := s.readRawString()
+				return RawString, literal, err
+			}
 		}
-
 	case '"':
+		if s.Version == VersionV2 {
+			// check for triple-quote multi-line string
+			_, c2, c3, err2 := s.peekThree()
+			if err2 == nil && c2 == '"' && c3 == '"' {
+				s.log("multi-line string, reading")
+				literal, err := s.readMultiLineString()
+				return QuotedString, literal, err
+			}
+		}
 		s.log("quoted string, reading")
 		literal, err := s.readQuotedString()
 		return QuotedString, literal, err
 
-	case '{', '}', '<', '>', ';', '[', ']', '=', ',':
-		return Unknown, nil, fmt.Errorf("unexpected character %c", c)
-
-	case '\\', '(', ')', '.', '_', '?', '/':
-		if !s.RelaxedNonCompliant.Permit(relaxed.NGINXSyntax) {
-			// some of these arent actually forbidden by the spec, but the test cases indicate that they should be disallowed
-			return Unknown, nil, fmt.Errorf("unexpected character %c", c)
+	case '`':
+		_, c2, c3, err2 := s.peekThree()
+		if err2 == nil && c2 == '`' && c3 == '`' {
+			s.log("multi-line expression string, reading")
+			literal, err := s.readMultiLineExpressionString()
+			return ExpressionString, literal, err
 		}
+		s.log("expression string, reading")
+		literal, err := s.readExpressionString()
+		return ExpressionString, literal, err
 
 	case '\'':
-		if s.RelaxedNonCompliant.Permit(relaxed.NGINXSyntax) {
+		if s.Version != VersionV2 && s.RelaxedNonCompliant.Permit(relaxed.NGINXSyntax) {
 			s.log("single quoted string, reading")
 			literal, err := s.readSingleQuotedString()
 			return QuotedString, literal, err
@@ -338,7 +687,8 @@ func (s *Scanner) readIdentifier() (TokenID, []byte, error) {
 	}
 
 	_, c2, err := s.peekTwo()
-	if err == nil && !isBareIdentifierStartChar(c, s.RelaxedNonCompliant) && !(c == '-' && !isDigit(c2)) {
+	s.log("checking if bare identifier start", "c", c, "c2", c2)
+	if err == nil && !isBareIdentifierStartCharVersion(c, s.RelaxedNonCompliant, s.Version) && !(c == '-' && !isDigit(c2)) {
 		s.log("not a valid bare identifier")
 		return Unknown, nil, fmt.Errorf("unexpected character %c", c)
 	}

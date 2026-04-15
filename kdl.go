@@ -3,17 +3,73 @@ package kdl
 import (
 	"io"
 
-	"github.com/sblinch/kdl-go/document"
-	"github.com/sblinch/kdl-go/internal/generator"
-	"github.com/sblinch/kdl-go/internal/parser"
-	"github.com/sblinch/kdl-go/internal/tokenizer"
+	"github.com/njreid/gokdl2/document"
+	"github.com/njreid/gokdl2/internal/generator"
+	"github.com/njreid/gokdl2/internal/parser"
+	"github.com/njreid/gokdl2/internal/tokenizer"
+	"github.com/njreid/gokdl2/relaxed"
 )
 
+// ParseVersion controls which KDL syntax version the public parser accepts.
+type ParseVersion int
+
+const (
+	// ParseVersionAuto tries KDL v2 first and falls back to v1 if v2 parsing fails.
+	ParseVersionAuto ParseVersion = ParseVersion(tokenizer.VersionAuto)
+	// ParseVersionV1 only accepts KDL v1 syntax.
+	ParseVersionV1 ParseVersion = ParseVersion(tokenizer.VersionV1)
+	// ParseVersionV2 only accepts KDL v2 syntax.
+	ParseVersionV2 ParseVersion = ParseVersion(tokenizer.VersionV2)
+)
+
+func (v ParseVersion) tokenizerVersion() tokenizer.Version {
+	return tokenizer.Version(v)
+}
+
 func parse(s *tokenizer.Scanner) (*document.Document, error) {
+	if s.Version != tokenizer.VersionAuto {
+		return parseOne(s)
+	}
+
+	// for VersionAuto, we need to be able to retry if the first attempt fails
+	// and it was likely a v1 document
+	data, err := io.ReadAll(s)
+	if err != nil {
+		return nil, err
+	}
+
+	// try v2 first
+	s2 := tokenizer.NewSlice(data)
+	s2.RelaxedNonCompliant = s.RelaxedNonCompliant
+	s2.ParseComments = s.ParseComments
+	s2.Version = tokenizer.VersionV2
+	doc, err := parseOne(s2)
+	if err == nil {
+		return doc, nil
+	}
+
+	// if v2 failed, it might be a v1 document; if it had a v2 marker, don't fallback
+	if s2.Version == tokenizer.VersionV2 && s2.Offset() > 0 {
+		// if version was explicitly set to v2 by marker, don't fallback
+		return nil, err
+	}
+
+	// fallback to v1
+	s1 := tokenizer.NewSlice(data)
+	s1.RelaxedNonCompliant = s.RelaxedNonCompliant
+	s1.ParseComments = s.ParseComments
+	s1.Version = tokenizer.VersionV1
+	return parseOne(s1)
+}
+
+func parseOne(s *tokenizer.Scanner) (*document.Document, error) {
 	defer s.Close()
 
 	p := parser.New()
-	opts := parser.ParseContextOptions{RelaxedNonCompliant: s.RelaxedNonCompliant}
+	opts := parser.ParseContextOptions{
+		RelaxedNonCompliant: s.RelaxedNonCompliant,
+		Version:             s.Version,
+	}
 	if s.ParseComments {
 		opts.Flags |= parser.ParseComments
 	}
@@ -27,12 +83,23 @@ func parse(s *tokenizer.Scanner) (*document.Document, error) {
 		return nil, s.Err()
 	}
 
-	return c.Document(), nil
+	doc := c.Document()
+	doc.Version = int(s.Version)
+	return doc, nil
 }
 
-type ParseOptions = parser.ParseContextOptions
+type ParseOptions struct {
+	// RelaxedNonCompliant enables optional non-standard parsing behaviors.
+	RelaxedNonCompliant relaxed.Flags
+	// ParseComments preserves comments in the parsed document.
+	ParseComments bool
+	// Version selects whether parsing is automatic, v1-only, or v2-only.
+	Version ParseVersion
+}
 
-var DefaultParseOptions = parser.ParseContextOptions{}
+var DefaultParseOptions = ParseOptions{
+	Version: ParseVersionAuto,
+}
 
 // Parse parses a KDL document from r and returns the parsed Document, or a non-nil error on failure
 func Parse(r io.Reader) (*document.Document, error) {
@@ -42,7 +109,8 @@ func Parse(r io.Reader) (*document.Document, error) {
 func ParseWithOptions(r io.Reader, opts ParseOptions) (*document.Document, error) {
 	s := tokenizer.New(r)
 	s.RelaxedNonCompliant = opts.RelaxedNonCompliant
-	s.ParseComments = opts.Flags.Has(parser.ParseComments)
+	s.ParseComments = opts.ParseComments
+	s.Version = opts.Version.tokenizerVersion()
 	return parse(s)
 }
 

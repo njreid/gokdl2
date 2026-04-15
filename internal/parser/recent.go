@@ -1,7 +1,7 @@
 package parser
 
 import (
-	"github.com/sblinch/kdl-go/internal/tokenizer"
+	"github.com/njreid/gokdl2/internal/tokenizer"
 )
 
 const recentTokensCount = 5

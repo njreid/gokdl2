@@ -2,7 +2,8 @@ package document
 
 // Document is the top-level container for a KDL document
 type Document struct {
-	Nodes []*Node
+	Nodes   []*Node
+	Version int // 0=unknown, 1=KDLv1, 2=KDLv2; set by parser when detected
 }
 
 // AddNode adds a Node to this document

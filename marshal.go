@@ -5,9 +5,9 @@ import (
 	"io"
 	"reflect"
 
-	"github.com/sblinch/kdl-go/document"
-	"github.com/sblinch/kdl-go/internal/generator"
-	"github.com/sblinch/kdl-go/internal/marshaler"
+	"github.com/njreid/gokdl2/document"
+	"github.com/njreid/gokdl2/internal/generator"
+	"github.com/njreid/gokdl2/internal/marshaler"
 )
 
 // Marshaler provides an interface for custom marshaling of a Go type into a Node

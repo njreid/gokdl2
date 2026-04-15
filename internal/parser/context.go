@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"errors"
 
-	"github.com/sblinch/kdl-go/document"
-	"github.com/sblinch/kdl-go/internal/tokenizer"
-	"github.com/sblinch/kdl-go/relaxed"
+	"github.com/njreid/gokdl2/document"
+	"github.com/njreid/gokdl2/internal/tokenizer"
+	"github.com/njreid/gokdl2/relaxed"
 )
 
 type ParseFlags uint8
@@ -22,6 +22,7 @@ const (
 type ParseContextOptions struct {
 	RelaxedNonCompliant relaxed.Flags
 	Flags               ParseFlags
+	Version             tokenizer.Version // VersionAuto, VersionV1, or VersionV2
 }
 
 var defaultParseContextOptions = ParseContextOptions{
@@ -44,18 +45,33 @@ type ParseContext struct {
 	typeAnnot tokenizer.Token
 	// true if a continuation backslash has been encountered and the next newline should be ignored
 	continuation bool
+	// true once the first newline after a continuation has been consumed
+	continuationNewlineSeen bool
+	// true for the first significant token parsed after a continuation
+	justContinuedLine bool
 	// true if a /- was encountered and the next entire node should be ignored
 	ignoreNextNode bool
 	// true if a /- was encountered and the next arg/prop should be ignored
 	ignoreNextArgProp bool
 	// true if a /- was encountered and the next child block should be ignored
 	ignoreChildren int
-	opts           ParseContextOptions
+	// true after finishing an ignored child block; only terminators may follow
+	afterIgnoredChildBlock bool
+	// tracks whether an ignored child block was introduced from a continued line
+	ignoreChildBlockFromContinuation bool
+	// marks the next slashdash as coming from a continued line
+	ignoreFromContinuation bool
+	opts                   ParseContextOptions
 
 	comment pendingComment
 
 	lastAddedNode *document.Node
 	recent        recentTokens
+
+	// VersionSetter is called when a /- kdl-version N marker is detected; used to update the scanner version
+	VersionSetter func(tokenizer.Version)
+	// versionMarkerStep tracks state for version marker detection (0=initial, -1=aborted, 5=done)
+	versionMarkerStep int
 }
 
 type pendingComment struct {
@@ -130,6 +146,21 @@ func (c *ParseContext) currentNode() *document.Node {
 func (c *ParseContext) pushState(newState parserState) {
 	c.states = append(c.states, c.state)
 	c.state = newState
+}
+
+func (c *ParseContext) startContinuation() {
+	c.continuation = true
+	c.continuationNewlineSeen = false
+}
+
+func (c *ParseContext) stopContinuation() {
+	c.continuation = false
+	c.continuationNewlineSeen = false
+}
+
+func (c *ParseContext) markIgnoreFromContinuation() {
+	c.ignoreFromContinuation = c.justContinuedLine
+	c.justContinuedLine = false
 }
 
 var errStateStackEmpty = errors.New("state stack empty")

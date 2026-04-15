@@ -12,7 +12,7 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/sblinch/kdl-go/document"
+	"github.com/njreid/gokdl2/document"
 )
 
 type structFieldAttrs []string

@@ -1,9 +1,11 @@
 package generator
 
 import (
+	"fmt"
 	"io"
 
-	"github.com/sblinch/kdl-go/document"
+	"github.com/njreid/gokdl2/document"
+	"github.com/njreid/gokdl2/internal/tokenizer"
 )
 
 type Options struct {
@@ -19,6 +21,10 @@ type Options struct {
 	AddEquals bool
 	// AddColon causes ':' symbols to be inserted between nodes and their values, which is noncompliant with the KDL spec
 	AddColons bool
+	// Version specifies the KDL version for output (VersionAuto/0 treated as VersionV1)
+	Version tokenizer.Version
+	// EmitVersionMarker causes a /- kdl-version N marker to be written at the start of the document
+	EmitVersionMarker bool
 }
 
 // Generator generates a KDL document from a parsed Document
@@ -35,6 +41,9 @@ var DefaultOptions = Options{
 
 // NewOptions creates a new Generator with the provided Options, that writes to w
 func NewOptions(w io.Writer, opts Options) *Generator {
+	if opts.Version == tokenizer.VersionAuto {
+		opts.Version = tokenizer.VersionV1
+	}
 	return &Generator{
 		w:       w,
 		options: opts,
@@ -58,6 +67,7 @@ func (g *Generator) generateNode(n *document.Node, leadingTrailingSpace, nameAnd
 		AddSemicolons:        g.options.AddSemicolons,
 		AddEquals:            g.options.AddEquals,
 		AddColons:            g.options.AddColons,
+		Version:              g.options.Version,
 	}
 	_, err := n.WriteToOptions(g.w, opts)
 	return err
@@ -74,6 +84,7 @@ func (g *Generator) generateNodes(nodes []*document.Node) error {
 		AddSemicolons:        g.options.AddSemicolons,
 		AddEquals:            g.options.AddEquals,
 		AddColons:            g.options.AddColons,
+		Version:              g.options.Version,
 	}
 
 	for _, node := range nodes {
@@ -86,5 +97,14 @@ func (g *Generator) generateNodes(nodes []*document.Node) error {
 
 // Generate generates the KDL for a Document, and returns a non-nil error on failure
 func (g *Generator) Generate(d *document.Document) error {
+	if g.options.EmitVersionMarker {
+		v := g.options.Version
+		if v == tokenizer.VersionAuto {
+			v = tokenizer.VersionV1
+		}
+		if _, err := fmt.Fprintf(g.w, "/- kdl-version %d\n", v); err != nil {
+			return err
+		}
+	}
 	return g.generateNodes(d.Nodes)
 }

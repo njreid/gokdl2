@@ -7,7 +7,9 @@
 package document
 
 import (
-	"github.com/sblinch/kdl-go/internal/tokenizer"
+	"sort"
+
+	"github.com/njreid/gokdl2/internal/tokenizer"
 )
 
 // Properties represents a list of properties for a Node
@@ -52,36 +54,51 @@ func (p Properties) Exist() bool {
 
 // String returns the KDL representation of the property list, formatting numbers per their flags
 func (p Properties) String() string {
+	return p.string(false, tokenizer.VersionV1)
+}
+
+func (p Properties) string(unformatted bool, version tokenizer.Version) string {
 	b := make([]byte, 0, len(p)*(1+8+1+8))
-	for k, v := range p {
+	for _, k := range p.sortedKeys() {
+		v := p[k]
 		b = append(b, ' ')
-		if len(k) > 0 && tokenizer.IsBareIdentifier(k, 0) {
+		if len(k) > 0 && tokenizer.IsBareIdentifierVersion(k, 0, version) {
 			b = append(b, k...)
 		} else {
 			b = AppendQuotedString(b, k, '"')
 		}
 		b = append(b, '=')
 		// property values must always be quoted
-		b = append(b, v.FormattedString()...)
+		if unformatted {
+			if version == tokenizer.VersionV2 {
+				b = append(b, v.UnformattedStringV2()...)
+			} else {
+				b = append(b, v.UnformattedString()...)
+			}
+		} else {
+			if version == tokenizer.VersionV2 {
+				b = append(b, v.FormattedStringV2()...)
+			} else {
+				b = append(b, v.FormattedString()...)
+			}
+		}
 	}
 	return string(b)
 }
 
 // UnformattedString returns the KDL representation of the property list, formatting numbers in decimal
 func (p Properties) UnformattedString() string {
-	b := make([]byte, 0, len(p)*(1+8+1+8))
-	for k, v := range p {
-		b = append(b, ' ')
-		if len(k) > 0 && tokenizer.IsBareIdentifier(k, 0) {
-			b = append(b, k...)
-		} else {
-			b = AppendQuotedString(b, k, '"')
-		}
-		b = append(b, '=')
-		// property values must always be quoted
-		b = append(b, v.UnformattedString()...)
-	}
-	return string(b)
+	return p.string(true, tokenizer.VersionV1)
+}
+
+// StringV2 returns the KDL representation of the property list in KDL v2 syntax.
+func (p Properties) StringV2() string {
+	return p.string(false, tokenizer.VersionV2)
+}
+
+// UnformattedStringV2 returns the KDL representation of the property list in KDL v2 syntax, formatting numbers in decimal.
+func (p Properties) UnformattedStringV2() string {
+	return p.string(true, tokenizer.VersionV2)
 }
 
 // AppendTo appends the KDL representation of the property list to b, formatting numbers in decimal, and returns b
@@ -92,9 +109,10 @@ func (p Properties) AppendTo(b []byte) []byte {
 		r = append(r, b...)
 		b = r
 	}
-	for k, v := range p {
+	for _, k := range p.sortedKeys() {
+		v := p[k]
 		b = append(b, ' ')
-		if len(k) > 0 && tokenizer.IsBareIdentifier(k, 0) {
+		if len(k) > 0 && tokenizer.IsBareIdentifierVersion(k, 0, tokenizer.VersionV1) {
 			b = append(b, k...)
 		} else {
 			b = AppendQuotedString(b, k, '"')
@@ -104,4 +122,13 @@ func (p Properties) AppendTo(b []byte) []byte {
 		b = append(b, v.UnformattedString()...)
 	}
 	return b
+}
+
+func (p Properties) sortedKeys() []string {
+	keys := make([]string, 0, len(p))
+	for k := range p {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }

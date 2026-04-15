@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sblinch/kdl-go/internal/tokenizer"
+	"github.com/njreid/gokdl2/internal/tokenizer"
 )
 
 func asStr(tokens []tokenizer.Token) string {

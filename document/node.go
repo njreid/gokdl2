@@ -5,7 +5,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/sblinch/kdl-go/internal/tokenizer"
+	"github.com/njreid/gokdl2/internal/tokenizer"
 )
 
 // TypeAnnotation represents a type annotation in a KDL document
@@ -172,6 +172,8 @@ type NodeWriteOptions struct {
 	AddEquals bool
 	// AddEquals causes ':' symbols to be inserted between nodes and their values, which is noncompliant with the KDL spec
 	AddColons bool
+	// Version specifies the KDL version for output
+	Version tokenizer.Version
 }
 
 var defaultNodeWriteOptions = NodeWriteOptions{
@@ -180,6 +182,7 @@ var defaultNodeWriteOptions = NodeWriteOptions{
 	Depth:                0,
 	Indent:               []byte{'\t'},
 	IgnoreFlags:          false,
+	Version:              tokenizer.VersionV1,
 }
 
 // String returns the complete KDL representation of this node, including its type annotation and name
@@ -294,7 +297,11 @@ func (n *Node) WriteToOptions(w io.Writer, opts NodeWriteOptions) (int64, error)
 		}
 		if err == nil {
 			// node names don't need to be quoted unless they include non-Identifier characters
-			write([]byte(n.Name.NodeNameString()))
+			if opts.Version == tokenizer.VersionV2 {
+				write([]byte(n.Name.NodeNameStringV2()))
+			} else {
+				write([]byte(n.Name.NodeNameString()))
+			}
 		}
 	}
 
@@ -310,19 +317,34 @@ func (n *Node) WriteToOptions(w io.Writer, opts NodeWriteOptions) (int64, error)
 		}
 		if err == nil {
 			// arguments must always be quoted
-			if opts.IgnoreFlags {
-				write([]byte(arg.UnformattedString()))
+			if opts.Version == tokenizer.VersionV2 {
+				if opts.IgnoreFlags {
+					write([]byte(arg.UnformattedStringV2()))
+				} else {
+					write([]byte(arg.FormattedStringV2()))
+				}
 			} else {
-				write([]byte(arg.FormattedString()))
+				if opts.IgnoreFlags {
+					write([]byte(arg.UnformattedString()))
+				} else {
+					write([]byte(arg.FormattedString()))
+				}
 			}
-
 		}
 	}
 	if n.Properties.Exist() && err == nil {
-		if opts.IgnoreFlags {
-			write([]byte(n.Properties.UnformattedString()))
+		if opts.Version == tokenizer.VersionV2 {
+			if opts.IgnoreFlags {
+				write([]byte(n.Properties.UnformattedStringV2()))
+			} else {
+				write([]byte(n.Properties.StringV2()))
+			}
 		} else {
-			write([]byte(n.Properties.String()))
+			if opts.IgnoreFlags {
+				write([]byte(n.Properties.UnformattedString()))
+			} else {
+				write([]byte(n.Properties.String()))
+			}
 		}
 	}
 	if err == nil {

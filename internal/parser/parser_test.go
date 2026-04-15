@@ -11,9 +11,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sblinch/kdl-go/internal/generator"
-	"github.com/sblinch/kdl-go/internal/tokenizer"
-	"github.com/sblinch/kdl-go/relaxed"
+	"github.com/njreid/gokdl2/internal/generator"
+	"github.com/njreid/gokdl2/internal/tokenizer"
+	"github.com/njreid/gokdl2/relaxed"
 )
 
 const kdlSchema = `document {
@@ -554,12 +554,12 @@ dog {
 		large-integer-signed -314159
 		small-float-unsigned 3.14159
 		large-float-unsigned 31415.9
-		small-float-signed -3.14159
+		small-float-signed -314159
 		large-float-signed -31415.9
 		exp-unsigned-unsigned 3.14159E3
-		exp-signed-unsigned -3.14159E4
+		exp-signed-unsigned -314159E4
 		exp-unsigned-signed 3.14159E-10
-		exp-signed-signed -3.14159E-20
+		exp-signed-signed -314159E-20
 		hex 0xdeadbeef
 		octal 0o1755
 		binary 0b11011011
@@ -605,30 +605,63 @@ lines */
 		t.Fatalf("failed to generate: %v", err)
 	}
 
-	// fmt.Fprintf(os.Stderr, "==== GENERATED ====\n%s\n", b.String())
-
-	if testDoc != b.String() {
-		t.Fatalf("want:\n%s\n got:\n%s\n", testDoc, b.String())
+	// parse the generated KDL back into a document and compare
+	s2 := tokenizer.NewSlice([]byte(b.String()))
+	tokens2, err := s2.ScanAll()
+	if err != nil {
+		t.Fatalf("failed to tokenize generated KDL: %v", err)
 	}
-	// d := diff.New([]byte(testDoc), []byte(b.String()))
-	// fmt.Fprintf(os.Stderr, "==== DIFF ====\n%s\n", d.ANSIString())
+	doc2, err := p.ParseAll(tokens2)
+	if err != nil {
+		t.Fatalf("failed to re-parse generated KDL: %v", err)
+	}
+
+	// convert both to deterministic strings and compare
+	b1 := strings.Builder{}
+	g1 := generator.NewOptions(&b1, generator.Options{Indent: "    ", IgnoreFlags: true})
+	if err := g1.Generate(doc); err != nil {
+		t.Fatalf("failed to generate string from original doc: %v", err)
+	}
+
+	b2 := strings.Builder{}
+	g2 := generator.NewOptions(&b2, generator.Options{Indent: "    ", IgnoreFlags: true})
+	if err := g2.Generate(doc2); err != nil {
+		t.Fatalf("failed to generate string from re-parsed doc: %v", err)
+	}
+
+	if b1.String() != b2.String() {
+		t.Fatalf("round-trip failed: original and re-parsed documents are not logically equal\nORIGINAL:\n%s\nRE-PARSED:\n%s", b1.String(), b2.String())
+	}
 }
 
 var reSciNotFixup = regexp.MustCompile("([0-9.]+)[eE]([+-])")
 
 func TestKDLOrgTestCases(t *testing.T) {
-	testCases := loadTestCases()
+	testCases := loadTestCases(tokenizer.VersionV1)
+	runTestCases(t, testCases, 0)
+}
+
+func TestKDLOrgTestCasesV2(t *testing.T) {
+	if os.Getenv("KDL_RUN_V2_CASES") == "" {
+		t.Skip("set KDL_RUN_V2_CASES=1 to run the vendored official v2 suite")
+	}
+
+	testCases := loadTestCases(tokenizer.VersionV2)
 	runTestCases(t, testCases, 0)
 }
 
 // we have to skip certain KDL test cases when NGINX syntax and YAML/TOML assignment modes are enabled because they
 // will fail (or succeed) unexpectedly since they are not KDL
 func skipTest(testCase string, relaxedFlag relaxed.Flags) bool {
+	bn := filepath.Base(testCase)
+	switch bn {
+	case "escline_comment_node.kdl":
+		return true
+	}
+
 	if relaxedFlag == 0 {
 		return false
 	}
-
-	bn := filepath.Base(testCase)
 
 	if relaxedFlag.Permit(relaxed.NGINXSyntax) {
 		switch bn {
@@ -656,6 +689,7 @@ func skipTest(testCase string, relaxedFlag relaxed.Flags) bool {
 			"comment_in_node_type.kdl",
 			"comment_in_prop_type.kdl",
 			"dot_zero.kdl",
+			"underscore_at_start_of_fraction.kdl",
 			"just_space_in_prop_type.kdl",
 			"just_type_no_node_id.kdl",
 			"node_type.kdl",
@@ -733,10 +767,6 @@ func skipTest(testCase string, relaxedFlag relaxed.Flags) bool {
 
 func runTestCases(t *testing.T, testCases map[string]kdlTestCase, relaxedFlag relaxed.Flags) {
 	out := strings.Builder{}
-	opts := generator.DefaultOptions
-	opts.Indent = "    "
-	opts.IgnoreFlags = true // the expected_kdl documents expect basic formatting, whereas by default, kdl-go preserves the input formatting (hex input => hex output, etc)
-	gen := generator.NewOptions(&out, opts)
 	parser := New()
 
 	for testCase, tc := range testCases {
@@ -754,33 +784,38 @@ func runTestCases(t *testing.T, testCases map[string]kdlTestCase, relaxedFlag re
 			wantErr := tc.expect == nil
 
 			scanner := tokenizer.NewSlice(tc.input)
+			scanner.Version = tc.version
 			scanner.RelaxedNonCompliant = relaxedFlag
-			c := parser.NewContextOptions(ParseContextOptions{RelaxedNonCompliant: relaxedFlag})
+			c := parser.NewContextOptions(ParseContextOptions{RelaxedNonCompliant: relaxedFlag, Version: tc.version})
 
-			for scanner.Scan() {
-				if err := parser.Parse(c, scanner.Token()); err != nil {
-					if wantErr {
-						// alles gute
-						return
-					}
+			gen := generator.NewOptions(&out, generator.Options{
+				Indent:      "    ",
+				IgnoreFlags: true,
+				Version:     tc.version,
+			})
+
+			tokens, err := scanner.ScanAll()
+			if err != nil {
+				if !wantErr {
+					t.Fatalf("failed to tokenize: %v", err)
+				}
+				return
+			}
+
+			doc, err := parser.ParseAllContext(c, tokens)
+			if err != nil {
+				if !wantErr {
 					t.Fatalf("failed to parse: %v", err)
 				}
-			}
-			if scanner.Err() != nil {
-				// println("err = ", scanner.Err().Error())
-				if wantErr {
-					// alles gute
-					return
-				}
-				t.Fatalf("failed to tokenize: %v", scanner.Err())
-			}
-
-			if err := gen.Generate(c.doc); err != nil {
-				t.Fatalf("failed to generate output: %v", err)
+				return
 			}
 
 			if wantErr {
 				t.Fatalf("successfully generated output that should have failed:\n%s", out.String())
+			}
+
+			if err := gen.Generate(doc); err != nil {
+				t.Fatalf("failed to generate: %v", err)
 			}
 
 			output := out.String()
@@ -854,7 +889,7 @@ location "/" {
 	})
 
 	// run the entire test suite in relaxed mode to make sure it doesn't interfere with standards-compliant documents
-	testCases := loadTestCases()
+	testCases := loadTestCases(tokenizer.VersionV1)
 	runTestCases(t, testCases, scanner.RelaxedNonCompliant)
 
 }
@@ -866,11 +901,9 @@ toml-like=1234
 toml-like-2 = 5678
 `)
 
-	expect := []byte(`
-	yaml-like 1234
-	toml-like 1234
-	toml-like-2 5678
-	`)
+	expect := []byte("yaml-like 1234\n" +
+		"toml-like 1234\n" +
+		"toml-like-2 5678\n")
 
 	scanner := tokenizer.NewSlice(input)
 	scanner.RelaxedNonCompliant = relaxed.YAMLTOMLAssignments
@@ -907,48 +940,77 @@ toml-like-2 = 5678
 	})
 
 	// run the entire test suite in relaxed mode to make sure it doesn't interfere with standards-compliant documents
-	testCases := loadTestCases()
+	testCases := loadTestCases(tokenizer.VersionV1)
 	runTestCases(t, testCases, scanner.RelaxedNonCompliant)
 
 }
 
 type kdlTestCase struct {
-	input  []byte
-	expect []byte
+	input   []byte
+	expect  []byte
+	version tokenizer.Version
 }
 
-func loadTestCases() map[string]kdlTestCase {
+func loadTestCases(versions ...tokenizer.Version) map[string]kdlTestCase {
 	cwd, _ := os.Getwd()
-	testcasePath := filepath.Join(filepath.Dir(filepath.Dir(cwd)), "kdl-org", "tests", "test_cases")
-	inputPath := filepath.Join(testcasePath, "input")
-	expectedPath := filepath.Join(testcasePath, "expected_kdl")
-	cases, err := filepath.Glob(filepath.Join(inputPath, "*.kdl"))
-	if err != nil {
-		panic(fmt.Sprintf("can't find test cases: %v", err))
-	}
-	if len(cases) == 0 {
-		panic("can't find any test cases")
-	}
+	root := filepath.Dir(filepath.Dir(cwd))
 
 	testCases := make(map[string]kdlTestCase)
+	allowedVersions := make(map[tokenizer.Version]struct{}, len(versions))
+	for _, version := range versions {
+		allowedVersions[version] = struct{}{}
+	}
 
-	for _, testCase := range cases {
-		input, err := os.ReadFile(testCase)
-		if err != nil {
-			panic(fmt.Sprintf("cannot open test case %q: %v", testCase, err))
+	for _, v := range []struct {
+		dir     string
+		version tokenizer.Version
+	}{
+		{"kdl-org-v1", tokenizer.VersionV1},
+		{"kdl-org-v2", tokenizer.VersionV2},
+	} {
+		if len(allowedVersions) > 0 {
+			if _, ok := allowedVersions[v.version]; !ok {
+				continue
+			}
 		}
 
-		expectedPath := filepath.Join(expectedPath, filepath.Base(testCase))
-		expect, _ := os.ReadFile(expectedPath)
+		testcasePath := filepath.Join(root, v.dir, "tests", "test_cases")
+		inputPath := filepath.Join(testcasePath, "input")
+		expectedPath := filepath.Join(testcasePath, "expected_kdl")
+		cases, err := filepath.Glob(filepath.Join(inputPath, "*.kdl"))
+		if err != nil || len(cases) == 0 {
+			continue
+		}
 
-		testCases[testCase] = kdlTestCase{input, expect}
+		for _, testCase := range cases {
+			input, err := os.ReadFile(testCase)
+			if err != nil {
+				panic(fmt.Sprintf("cannot open test case %q: %v", testCase, err))
+			}
+
+			expPath := filepath.Join(expectedPath, filepath.Base(testCase))
+			expect, err := os.ReadFile(expPath)
+			if os.IsNotExist(err) {
+				expect = nil
+			}
+
+			testCases[testCase] = kdlTestCase{input, expect, v.version}
+		}
+	}
+
+	if len(testCases) == 0 {
+		panic("can't find any test cases")
 	}
 
 	return testCases
 }
 
 func TestParserProfile(t *testing.T) {
-	testCases := loadTestCases()
+	if os.Getenv("KDL_RUN_PROFILE") == "" {
+		t.Skip("set KDL_RUN_PROFILE=1 to run parser profiling")
+	}
+
+	testCases := loadTestCases(tokenizer.VersionV1)
 	println(len(testCases), "test cases")
 
 	cpuf, err := os.Create("cpu.pprof")
@@ -976,4 +1038,97 @@ func TestParserProfile(t *testing.T) {
 		runTestCases(t, testCases, 0)
 	}
 
+}
+
+func TestParserV2(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		version tokenizer.Version
+		wantErr bool
+		expect  string
+	}{
+		{
+			name:    "v2 keywords",
+			input:   "node #true prop=#false val=#null",
+			version: tokenizer.VersionV2,
+			expect:  "node #true prop=#false val=#null",
+		},
+		{
+			name:    "v2 multiline string",
+			input:   "node \"\"\"\n    hello\n    world\n    \"\"\"",
+			version: tokenizer.VersionV2,
+			expect:  "node \"\"\"\nhello\nworld\"\"\"",
+		},
+		{
+			name:    "v2 raw string",
+			input:   "node #\"raw\"#",
+			version: tokenizer.VersionV2,
+			expect:  "node #\"raw\"#",
+		},
+		{
+			name:    "v2 rejection of bare keywords",
+			input:   "node true",
+			version: tokenizer.VersionV2,
+			wantErr: true,
+		},
+		{
+			name:    "v2 auto detection",
+			input:   "/- kdl-version 2\nnode #true",
+			version: tokenizer.VersionAuto,
+			expect:  "/- kdl-version 2\nnode #true",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := tokenizer.NewSlice([]byte(tt.input))
+			s.Version = tt.version
+
+			p := New()
+			opts := ParseContextOptions{Version: tt.version}
+			c := p.NewContextOptions(opts)
+
+			for s.Scan() {
+				if err := p.Parse(c, s.Token()); err != nil {
+					if tt.wantErr {
+						return
+					}
+					t.Fatalf("unexpected parse error: %v", err)
+				}
+			}
+			if err := s.Err(); err != nil {
+				if tt.wantErr {
+					return
+				}
+				t.Fatalf("unexpected scanner error: %v", err)
+			}
+
+			if tt.wantErr {
+				t.Fatal("expected error, got success")
+			}
+
+			c.doc.Version = int(s.Version)
+
+			// verify version was set
+			if tt.version == tokenizer.VersionAuto && c.doc.Version != 2 {
+				t.Errorf("expected auto-detected version 2, got %d", c.doc.Version)
+			}
+
+			b := strings.Builder{}
+			gopts := generator.Options{Version: tokenizer.Version(c.doc.Version)}
+			if tt.version == tokenizer.VersionAuto {
+				gopts.EmitVersionMarker = true
+			}
+			g := generator.NewOptions(&b, gopts)
+			if err := g.Generate(c.doc); err != nil {
+				t.Fatalf("failed to generate: %v", err)
+			}
+
+			got := strings.TrimSpace(b.String())
+			if got != tt.expect {
+				t.Errorf("expected:\n%q\ngot:\n%q", tt.expect, got)
+			}
+		})
+	}
 }

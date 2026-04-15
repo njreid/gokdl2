@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sblinch/kdl-go/document"
-	"github.com/sblinch/kdl-go/internal/coerce"
-	"github.com/sblinch/kdl-go/relaxed"
+	"github.com/njreid/gokdl2/document"
+	"github.com/njreid/gokdl2/internal/coerce"
+	"github.com/njreid/gokdl2/relaxed"
 )
 
 type unmarshaler interface {
