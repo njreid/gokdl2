@@ -136,7 +136,7 @@ func UnquoteString(s string) (string, error) {
 	}
 	q := s[0]
 	switch q {
-	case '"', '\'':
+	case '"', '\'', '`':
 	default:
 		return "", ErrInvalid
 	}
@@ -397,27 +397,36 @@ func AppendRawStringV2(b []byte, s string, hashCount int) []byte {
 //  3. The indentation of the closing """ line defines the base indentation stripped from all content lines.
 //  4. Escape sequences are processed as in regular quoted strings.
 func UnquoteMultiLineString(s string) (string, int, error) {
-	const delim = `"""`
+	return unquoteMultiLineToken(s, `"""`, '"', true)
+}
 
-	// check for Raw Triple-Quoted Strings (#"""..."""#)
+// UnquoteMultiLineExpressionString parses a triple-backtick multi-line expression string and returns its content.
+func UnquoteMultiLineExpressionString(s string) (string, error) {
+	v, _, err := unquoteMultiLineToken(s, "```", '`', false)
+	return v, err
+}
+
+func unquoteMultiLineToken(s string, delim string, quote byte, allowRaw bool) (string, int, error) {
 	hashCount := 0
-	for hashCount < len(s) && s[hashCount] == '#' {
-		hashCount++
-	}
-
-	if hashCount > 0 {
-		suffix := delim + strings.Repeat("#", hashCount)
-		if !strings.HasPrefix(s[hashCount:], delim) || !strings.HasSuffix(s, suffix) {
-			return "", 0, ErrInvalid
+	if allowRaw {
+		for hashCount < len(s) && s[hashCount] == '#' {
+			hashCount++
 		}
-		s = s[hashCount : len(s)-hashCount]
+
+		if hashCount > 0 {
+			suffix := delim + strings.Repeat("#", hashCount)
+			if !strings.HasPrefix(s[hashCount:], delim) || !strings.HasSuffix(s, suffix) {
+				return "", 0, ErrInvalid
+			}
+			s = s[hashCount : len(s)-hashCount]
+		}
 	}
 
-	if len(s) < 6 || s[:3] != delim || s[len(s)-3:] != delim {
+	if len(s) < len(delim)*2 || !strings.HasPrefix(s, delim) || !strings.HasSuffix(s, delim) {
 		return "", 0, ErrInvalid
 	}
 
-	inner := s[3 : len(s)-3]
+	inner := s[len(delim) : len(s)-len(delim)]
 
 	openingLineEnd, openingNewlineLen := firstNewline(inner)
 	if openingLineEnd == -1 {
@@ -448,7 +457,7 @@ func UnquoteMultiLineString(s string) (string, int, error) {
 	}
 
 	b := make([]byte, 0, len(dedented))
-	b, err = appendUnquotedMultilineContent(b, dedented, closingEscaped)
+	b, err = appendUnquotedMultilineContent(b, dedented, quote, closingEscaped)
 	return string(b), hashCount, err
 }
 
@@ -589,12 +598,16 @@ func hasLineContinuation(line string) bool {
 
 // appendUnquotedContent processes escape sequences in raw string content (no surrounding quotes).
 func appendUnquotedContent(b []byte, s string) ([]byte, error) {
-	// wrap in quotes so we can reuse AppendUnquotedString
-	quoted := `"` + s + `"`
-	return AppendUnquotedString(b, quoted, '"')
+	return appendUnquotedContentQuoted(b, s, '"')
 }
 
-func appendUnquotedMultilineContent(b []byte, s string, allowTrailingEscape bool) ([]byte, error) {
+func appendUnquotedContentQuoted(b []byte, s string, quote byte) ([]byte, error) {
+	// wrap in quotes so we can reuse AppendUnquotedString
+	quoted := string([]byte{quote}) + s + string([]byte{quote})
+	return AppendUnquotedString(b, quoted, quote)
+}
+
+func appendUnquotedMultilineContent(b []byte, s string, quote byte, allowTrailingEscape bool) ([]byte, error) {
 	for i := 0; i < len(s); {
 		r, size := utf8.DecodeRuneInString(s[i:])
 		if r != '\\' {
@@ -636,7 +649,7 @@ func appendUnquotedMultilineContent(b []byte, s string, allowTrailingEscape bool
 			b = append(b, '\f')
 		case 's':
 			b = append(b, ' ')
-		case '"', '\\':
+		case rune(quote), '\\':
 			b = append(b, byte(r))
 		case 'u':
 			if i+size >= len(s) || s[i+size] != '{' {
@@ -672,16 +685,27 @@ func appendUnquotedMultilineContent(b []byte, s string, allowTrailingEscape bool
 
 // AppendMultiLineString appends s, quoted for use as a KDL v2 multi-line string ("""..."""), to b and returns the expanded buffer.
 func AppendMultiLineString(b []byte, s string) []byte {
-	b = append(b, '"', '"', '"', '\n')
+	return appendMultiLineQuotedString(b, s, '"', `"""`)
+}
 
-	// we use a simplified version of AppendQuotedString that doesn't escape newlines
-	// and doesn't add surrounding quotes
+// AppendMultiLineExpressionString appends s, quoted for use as a triple-backtick multi-line expression string.
+func AppendMultiLineExpressionString(b []byte, s string) []byte {
+	b = appendMultiLineQuotedString(b, s, '`', "```")
+	if len(s) > 0 && s[len(s)-1] != '\n' {
+		b = append(b[:len(b)-3], '\n')
+		b = append(b, '`', '`', '`')
+	}
+	return b
+}
+
+func appendMultiLineQuotedString(b []byte, s string, quote byte, delim string) []byte {
+	b = append(b, delim...)
+	b = append(b, '\n')
+
 	lines := strings.Split(s, "\n")
 	for i, line := range lines {
-		// we wrap each line in quotes temporarily to reuse AppendQuotedString's core logic
-		// then strip the quotes
 		var lineBuf []byte
-		lineBuf = AppendQuotedString(lineBuf, line, '"')
+		lineBuf = AppendQuotedString(lineBuf, line, quote)
 		if len(lineBuf) >= 2 {
 			b = append(b, lineBuf[1:len(lineBuf)-1]...)
 		}
@@ -690,7 +714,7 @@ func AppendMultiLineString(b []byte, s string) []byte {
 		}
 	}
 
-	b = append(b, '"', '"', '"')
+	b = append(b, delim...)
 	return b
 }
 

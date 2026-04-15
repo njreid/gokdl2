@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/sblinch/kdl-go/relaxed"
+	"github.com/njreid/gokdl2/relaxed"
 )
 
 // readWhitespace reads all whitespace starting from the current position. It does not return an error as in practice it
@@ -201,6 +201,10 @@ func (s *Scanner) readQuotedString() ([]byte, error) {
 
 func (s *Scanner) readSingleQuotedString() ([]byte, error) {
 	return s.readQuotedStringQ('\'')
+}
+
+func (s *Scanner) readExpressionString() ([]byte, error) {
+	return s.readQuotedStringQ('`')
 }
 
 // readQuotedString reads and returns a quoted string from the current position, or returns a non-nil error on failure.
@@ -493,6 +497,59 @@ func (s *Scanner) readMultiLineString() ([]byte, error) {
 	return s.readMultiLineStringRaw(0)
 }
 
+// readMultiLineExpressionString reads a triple-backtick multi-line expression string from the current position.
+func (s *Scanner) readMultiLineExpressionString() ([]byte, error) {
+	s.pushMark()
+	defer s.popMark()
+
+	for i := 0; i < 3; i++ {
+		if _, err := s.get(); err != nil {
+			return nil, io.ErrUnexpectedEOF
+		}
+	}
+
+	for {
+		c, err := s.peek()
+		if err != nil {
+			return nil, io.ErrUnexpectedEOF
+		}
+		if c == ' ' || c == '\t' {
+			s.skip()
+			continue
+		}
+		if c == '\n' || c == '\r' {
+			break
+		}
+		return nil, fmt.Errorf("non-whitespace content after opening triple-backtick")
+	}
+
+	for {
+		c, err := s.get()
+		if err != nil {
+			if err == io.EOF {
+				err = io.ErrUnexpectedEOF
+			}
+			return nil, err
+		}
+
+		if c == '\\' {
+			if _, err := s.get(); err != nil {
+				return nil, io.ErrUnexpectedEOF
+			}
+			continue
+		}
+
+		if c == '`' {
+			c2, c3, err := s.peekTwo()
+			if err == nil && c2 == '`' && c3 == '`' {
+				s.skip()
+				s.skip()
+				return s.copyFromMark(), nil
+			}
+		}
+	}
+}
+
 // readMultiLineStringRaw reads a KDL v2 triple-quoted multi-line string with hashCount hashes ("""...""" or #"""..."""#).
 func (s *Scanner) readMultiLineStringRaw(hashCount int) ([]byte, error) {
 	s.pushMark()
@@ -609,6 +666,17 @@ func (s *Scanner) readIdentifier() (TokenID, []byte, error) {
 		s.log("quoted string, reading")
 		literal, err := s.readQuotedString()
 		return QuotedString, literal, err
+
+	case '`':
+		_, c2, c3, err2 := s.peekThree()
+		if err2 == nil && c2 == '`' && c3 == '`' {
+			s.log("multi-line expression string, reading")
+			literal, err := s.readMultiLineExpressionString()
+			return ExpressionString, literal, err
+		}
+		s.log("expression string, reading")
+		literal, err := s.readExpressionString()
+		return ExpressionString, literal, err
 
 	case '\'':
 		if s.Version != VersionV2 && s.RelaxedNonCompliant.Permit(relaxed.NGINXSyntax) {

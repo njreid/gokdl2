@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"errors"
 
-	"github.com/sblinch/kdl-go/document"
-	"github.com/sblinch/kdl-go/internal/tokenizer"
-	"github.com/sblinch/kdl-go/relaxed"
+	"github.com/njreid/gokdl2/document"
+	"github.com/njreid/gokdl2/internal/tokenizer"
+	"github.com/njreid/gokdl2/relaxed"
 )
 
 type ParseFlags uint8

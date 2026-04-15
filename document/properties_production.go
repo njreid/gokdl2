@@ -9,7 +9,7 @@ package document
 import (
 	"sort"
 
-	"github.com/sblinch/kdl-go/internal/tokenizer"
+	"github.com/njreid/gokdl2/internal/tokenizer"
 )
 
 // Properties represents a list of properties for a Node

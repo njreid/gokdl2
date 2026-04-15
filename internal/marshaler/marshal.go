@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sblinch/kdl-go/document"
-	"github.com/sblinch/kdl-go/internal/coerce"
-	"github.com/sblinch/kdl-go/internal/tokenizer"
+	"github.com/njreid/gokdl2/document"
+	"github.com/njreid/gokdl2/internal/coerce"
+	"github.com/njreid/gokdl2/internal/tokenizer"
 )
 
 type marshaler interface {
@@ -778,7 +778,11 @@ func marshalValueToNode(c *marshalContext, name string, value reflect.Value, fld
 			return nil, err
 		}
 
-		dv.Flag |= document.FlagQuoted
+		if _, ok := dv.Value.(document.Expression); ok {
+			dv.Flag |= document.FlagExpression
+		} else {
+			dv.Flag |= document.FlagQuoted
+		}
 		return node, nil
 	default:
 		// cain't do nuffin

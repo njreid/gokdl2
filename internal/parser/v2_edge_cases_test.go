@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sblinch/kdl-go/internal/generator"
-	"github.com/sblinch/kdl-go/internal/tokenizer"
+	"github.com/njreid/gokdl2/internal/generator"
+	"github.com/njreid/gokdl2/internal/tokenizer"
 )
 
 func TestParserV2EdgeCases(t *testing.T) {
@@ -62,7 +62,7 @@ func TestParserV2EdgeCases(t *testing.T) {
 			name:    "raw triple-quote",
 			input:   "node #\"\"\"\n    raw\\scontent\n    \"\"\"#",
 			version: tokenizer.VersionV2,
-			expect:  "node #\"raw\\scontent\"#",
+			expect:  "node #\"\"\"\nraw\\scontent\n\"\"\"#",
 		},
 	}
 

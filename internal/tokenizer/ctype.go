@@ -1,7 +1,7 @@
 package tokenizer
 
 import (
-	"github.com/sblinch/kdl-go/relaxed"
+	"github.com/njreid/gokdl2/relaxed"
 )
 
 func isDisallowedV2Rune(c rune) bool {

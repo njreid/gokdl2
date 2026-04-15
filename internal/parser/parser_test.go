@@ -11,9 +11,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sblinch/kdl-go/internal/generator"
-	"github.com/sblinch/kdl-go/internal/tokenizer"
-	"github.com/sblinch/kdl-go/relaxed"
+	"github.com/njreid/gokdl2/internal/generator"
+	"github.com/njreid/gokdl2/internal/tokenizer"
+	"github.com/njreid/gokdl2/relaxed"
 )
 
 const kdlSchema = `document {

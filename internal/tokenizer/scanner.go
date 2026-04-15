@@ -9,7 +9,7 @@ import (
 	"sync"
 	"unicode/utf8"
 
-	"github.com/sblinch/kdl-go/relaxed"
+	"github.com/njreid/gokdl2/relaxed"
 )
 
 var (

@@ -3,8 +3,8 @@ package parser
 import (
 	"fmt"
 
-	"github.com/sblinch/kdl-go/document"
-	"github.com/sblinch/kdl-go/internal/tokenizer"
+	"github.com/njreid/gokdl2/document"
+	"github.com/njreid/gokdl2/internal/tokenizer"
 )
 
 func tokensAdjacent(prev, curr tokenizer.Token) bool {

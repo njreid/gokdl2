@@ -10,7 +10,7 @@ import (
 	"runtime/pprof"
 	"testing"
 
-	"github.com/sblinch/kdl-go/relaxed"
+	"github.com/njreid/gokdl2/relaxed"
 )
 
 const kdlSchema = `document {

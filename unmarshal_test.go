@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sblinch/kdl-go/document"
-	"github.com/sblinch/kdl-go/relaxed"
+	"github.com/njreid/gokdl2/document"
+	"github.com/njreid/gokdl2/relaxed"
 )
 
 const kdlRelaxedSuffixes = `

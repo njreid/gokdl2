@@ -9,17 +9,17 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/sblinch/kdl-go/internal/tokenizer"
+	"github.com/njreid/gokdl2/internal/tokenizer"
 )
 
 // ValueFlag represents flags for a Value
-type ValueFlag uint8
+type ValueFlag uint16
 
 const (
 	// FlagNone indicates no flag is set
-	FlagNone ValueFlag = iota
+	FlagNone ValueFlag = 0
 	// FlagRaw specifies that this Value should be output in RawString notation (r"foo\n")
-	FlagRaw
+	FlagRaw ValueFlag = 1 << iota
 	// FlagQuoted specifies that this Value should be output in FormattedString notation ("foo\\n")
 	FlagQuoted
 	// FlagBinary specifies that this Value should be output in binary notation (0b10101010)
@@ -34,7 +34,13 @@ const (
 	FlagMultiLine
 	// FlagBare specifies that this Value was parsed as a KDL v2 bare identifier
 	FlagBare
+	// FlagExpression specifies that this Value should be output as a backtick-delimited expression.
+	FlagExpression
 )
+
+func (f ValueFlag) Has(flag ValueFlag) bool {
+	return f&flag != 0
+}
 
 // Value represents a value in a KDL document
 type Value struct {
@@ -89,20 +95,20 @@ func (v *Value) value(b []byte, opts valueOpts) []byte {
 	base := 10
 	prefix := ""
 	if haveOpt(voUseNumericFlags) {
-		switch v.Flag {
-		case FlagBinary:
+		switch {
+		case v.Flag.Has(FlagBinary):
 			base = 2
 			prefix = "0b"
 			if b == nil {
 				b = make([]byte, 0, 10)
 			}
-		case FlagOctal:
+		case v.Flag.Has(FlagOctal):
 			base = 8
 			prefix = "0o"
 			if b == nil {
 				b = make([]byte, 0, 10)
 			}
-		case FlagHexadecimal:
+		case v.Flag.Has(FlagHexadecimal):
 			base = 16
 			prefix = "0x"
 			b = make([]byte, 0, 18)
@@ -237,7 +243,7 @@ func (v *Value) value(b []byte, opts valueOpts) []byte {
 			b = make([]byte, 0, size)
 		}
 
-		if v.Flag == FlagBareSuffixed || (v.Flag == FlagBare && haveOpt(voVersionV2)) || (!haveOpt(voNoBare) && (haveOpt(voNoQuotes) || (isBare && haveOpt(voSimpleString)))) {
+		if v.Flag.Has(FlagBareSuffixed) || (v.Flag.Has(FlagBare) && haveOpt(voVersionV2)) || (!haveOpt(voNoBare) && (haveOpt(voNoQuotes) || (isBare && haveOpt(voSimpleString)))) {
 			b = append(b, x...)
 		} else {
 			hashes := v.RawHashes
@@ -245,25 +251,42 @@ func (v *Value) value(b []byte, opts valueOpts) []byte {
 				hashes = -1
 			}
 
-			if v.Flag == FlagMultiLine && haveOpt(voStrictStringFlags) {
-				if v.Flag == FlagRaw && haveOpt(voVersionV2) {
+			if v.Flag.Has(FlagMultiLine) && haveOpt(voStrictStringFlags) {
+				if v.Flag.Has(FlagRaw) && haveOpt(voVersionV2) {
 					b = AppendMultiLineStringV2(b, x, hashes)
 				} else {
 					b = AppendMultiLineString(b, x)
 				}
-			} else if v.Flag == FlagRaw && haveOpt(voStrictStringFlags) {
+			} else if v.Flag.Has(FlagRaw) && haveOpt(voStrictStringFlags) {
 				if haveOpt(voVersionV2) {
 					b = AppendRawStringV2(b, x, hashes)
 				} else {
 					b = AppendRawString(b, x, hashes)
 				}
-			} else if v.Flag == FlagQuoted || (v.Flag == FlagRaw && !haveOpt(voStrictStringFlags)) || (v.Flag == FlagMultiLine && !haveOpt(voStrictStringFlags)) {
+			} else if v.Flag.Has(FlagQuoted) || (v.Flag.Has(FlagRaw) && !haveOpt(voStrictStringFlags)) || (v.Flag.Has(FlagMultiLine) && !haveOpt(voStrictStringFlags)) {
 				b = AppendQuotedString(b, x, '"')
 			} else if isBare && !haveOpt(voNoBare) {
 				b = append(b, x...)
 			} else {
 				b = AppendQuotedString(b, x, '"')
 			}
+		}
+
+	case Expression:
+		if b == nil {
+			size := len(x)
+			if !haveOpt(voNoQuotes) {
+				size += 16
+			}
+			b = make([]byte, 0, size)
+		}
+
+		if haveOpt(voNoQuotes) {
+			b = append(b, string(x)...)
+		} else if v.Flag.Has(FlagMultiLine) || strings.ContainsRune(string(x), '\n') {
+			b = AppendMultiLineExpressionString(b, string(x))
+		} else {
+			b = AppendQuotedString(b, string(x), '`')
 		}
 
 	case *big.Int:
@@ -375,6 +398,9 @@ func (v *Value) ValueString() string {
 // - nulls are returned as nil
 // - strings are returned as strings containing the unquoted representation of the string
 func (v *Value) ResolvedValue() interface{} {
+	if _, ok := v.Value.(Expression); ok {
+		return v.Value
+	}
 	if _, ok := v.Value.(string); ok {
 		return v.string(voNoQuotes, tokenizer.VersionV1)
 	} else {
@@ -384,6 +410,9 @@ func (v *Value) ResolvedValue() interface{} {
 
 // ResolvedValueV2 is similar to ResolvedValue, but outputs KDL v2 syntax for strings.
 func (v *Value) ResolvedValueV2() interface{} {
+	if _, ok := v.Value.(Expression); ok {
+		return v.Value
+	}
 	if _, ok := v.Value.(string); ok {
 		return v.string(voNoQuotes, tokenizer.VersionV2)
 	} else {
@@ -495,6 +524,10 @@ func isMultilineStringToken(s string) bool {
 	return strings.HasPrefix(s[hashCount:], `"""`)
 }
 
+func isMultilineExpressionToken(s string) bool {
+	return strings.HasPrefix(s, "```")
+}
+
 func keywordValue(data []byte) (interface{}, error) {
 	switch string(data) {
 	case "#inf":
@@ -520,11 +553,24 @@ func ValueFromToken(t tokenizer.Token) (*Value, error) {
 			v.Flag = FlagMultiLine
 			// if it had hashes, it's also a raw string
 			if strings.HasPrefix(s, "#") {
-				v.Flag = FlagRaw
+				v.Flag |= FlagRaw
 			}
 		} else {
 			v.Value, err = unquoteQuotedTokenString(t.Data)
 			v.Flag = FlagQuoted
+		}
+	case tokenizer.ExpressionString:
+		s := string(t.Data)
+		if isMultilineExpressionToken(s) {
+			var expr string
+			expr, err = UnquoteMultiLineExpressionString(s)
+			v.Value = Expression(expr)
+			v.Flag = FlagExpression | FlagMultiLine
+		} else {
+			var expr string
+			expr, err = UnquoteString(s)
+			v.Value = Expression(expr)
+			v.Flag = FlagExpression
 		}
 	case tokenizer.BareIdentifier:
 		v.Value = string(t.Data)

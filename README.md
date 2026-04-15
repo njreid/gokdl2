@@ -1,6 +1,8 @@
-# kdl-go
+# gokdl2
 
-`kdl-go` is a Go library for the [KDL Document Language](https://kdl.dev/).
+`gokdl2` is a Go library for the [KDL Document Language](https://kdl.dev/).
+
+This repository is an actively maintained fork of [`sblinch/kdl-go`](https://github.com/njreid/gokdl2). The original project remains the historical upstream reference, while ongoing development for this fork lives here in `njreid/gokdl2`.
 
 It now supports:
 
@@ -18,11 +20,12 @@ It now supports:
 - marshaling and unmarshaling for Go structs, maps, and custom `(Un)Marshal` interfaces
 - support for `encoding/json/v2`-style `format` options for `time.Time`, `time.Duration`, `[]byte`, and `float32/64`
 - contextual parse errors with line/column information and source excerpts
+- backtick-delimited expression literals, preserved as `document.Expression` values for CEL or similar runtimes
 
 ## Import
 
 ```go
-import "github.com/sblinch/kdl-go"
+import "github.com/njreid/gokdl2"
 ```
 
 ## Parsing
@@ -68,6 +71,22 @@ fmt.Println(v1doc.Version, v2doc.Version)
 
 ```text
 1 2
+```
+
+## Expressions
+
+Backtick-delimited expressions are parsed as `document.Expression` instead of ordinary strings, so downstream code can distinguish them from plain text.
+
+```go
+data := "rule `request.auth.claims.sub` filter=```\nrequest.auth != nil\n```\n"
+
+doc, err := kdl.Parse(strings.NewReader(data))
+if err != nil {
+	panic(err)
+}
+
+arg := doc.Nodes[0].Arguments[0].ResolvedValue().(document.Expression)
+fmt.Println(arg)
 ```
 
 ## Generating

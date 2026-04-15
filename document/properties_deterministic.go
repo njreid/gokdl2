@@ -8,7 +8,7 @@
 package document
 
 import (
-	"github.com/sblinch/kdl-go/internal/tokenizer"
+	"github.com/njreid/gokdl2/internal/tokenizer"
 )
 
 type Properties struct {

@@ -33,6 +33,7 @@ const (
 	SuffixedDecimal
 	RawString
 	QuotedString
+	ExpressionString
 	BraceOpen
 	BraceClose
 	ParensOpen
@@ -71,6 +72,7 @@ var tokenClasses = map[TokenID][]TokenID{
 	BareIdentifier:    {ClassValue, ClassIdentifier},
 	RawString:         {ClassValue, ClassString, ClassIdentifier},
 	QuotedString:      {ClassValue, ClassString, ClassIdentifier},
+	ExpressionString:  {ClassValue, ClassString},
 	BraceOpen:         {},
 	BraceClose:        {},
 	ParensOpen:        {},
@@ -120,6 +122,8 @@ func (t TokenID) String() string {
 		return "RawString"
 	case QuotedString:
 		return "FormattedString"
+	case ExpressionString:
+		return "ExpressionString"
 	case BraceOpen:
 		return "BraceOpen"
 	case BraceClose:
