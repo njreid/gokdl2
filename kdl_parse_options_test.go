@@ -40,6 +40,42 @@ func TestParseVersionSelection(t *testing.T) {
 		}
 	})
 
+	t.Run("friendly parse error for missing property value", func(t *testing.T) {
+		_, err := ParseWithOptions(strings.NewReader("node key="), ParseOptions{Version: ParseVersionV2})
+		if err == nil {
+			t.Fatal("ParseWithOptions() error = nil, want error")
+		}
+
+		msg := err.Error()
+		if !strings.Contains(msg, "unexpected end of input; expected a property value") {
+			t.Fatalf("ParseWithOptions() error = %q, want friendly property-value message", msg)
+		}
+		if !strings.Contains(msg, "at line 1, column 10") {
+			t.Fatalf("ParseWithOptions() error = %q, want line/column", msg)
+		}
+		if !strings.Contains(msg, "node key=") || !strings.Contains(msg, "^") {
+			t.Fatalf("ParseWithOptions() error = %q, want source context", msg)
+		}
+		if strings.Contains(msg, "statePropertyValue") {
+			t.Fatalf("ParseWithOptions() error leaked parser state: %q", msg)
+		}
+	})
+
+	t.Run("friendly parse error for missing separator", func(t *testing.T) {
+		_, err := ParseWithOptions(strings.NewReader("node \"a\"\"b\"\n"), ParseOptions{Version: ParseVersionV2})
+		if err == nil {
+			t.Fatal("ParseWithOptions() error = nil, want error")
+		}
+
+		msg := err.Error()
+		if !strings.Contains(msg, "missing whitespace, newline, comment, or ';' before string") {
+			t.Fatalf("ParseWithOptions() error = %q, want friendly separator message", msg)
+		}
+		if strings.Contains(msg, "FormattedString") || strings.Contains(msg, "QuotedString") {
+			t.Fatalf("ParseWithOptions() error leaked token internals: %q", msg)
+		}
+	})
+
 	t.Run("explicit versions succeed", func(t *testing.T) {
 		v1Doc, err := ParseWithOptions(strings.NewReader("node r\"raw\"\n"), ParseOptions{Version: ParseVersionV1})
 		if err != nil {

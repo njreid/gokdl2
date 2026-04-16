@@ -109,7 +109,7 @@ func verifyArgsPropsChildren(c *unmarshalContext, node *document.Node, expectedA
 				}
 			}
 			if len(extraProps) > 0 {
-				return fmt.Errorf("%s has unexpected properties %s", node.Name.ValueString(), strings.Join(extraProps, ", "))
+				return fmt.Errorf("%s has unexpected properties: %s", node.Name.ValueString(), strings.Join(extraProps, ", "))
 			}
 		}
 
@@ -119,7 +119,7 @@ func verifyArgsPropsChildren(c *unmarshalContext, node *document.Node, expectedA
 			extraProps = append(extraProps, name)
 		}
 
-		return fmt.Errorf("%s has unexpected properties %s", node.Name.ValueString(), strings.Join(extraProps, ", "))
+		return fmt.Errorf("%s has unexpected properties: %s", node.Name.ValueString(), strings.Join(extraProps, ", "))
 	}
 
 	if !allowChildren && len(node.Children) > 0 {
@@ -677,7 +677,7 @@ func unmarshalNodeToStruct(c *unmarshalContext, node *document.Node, destStruct 
 	if node.Properties.Len() > 0 {
 
 		// try to assign each property to a struct field tagged with the property's name
-		handledProps := 0
+		var handledProps []string
 		for propKey, propVal := range node.Properties.Unordered() {
 			safePropKey := normalizeKey(propKey, c.indexer.caseSensitive)
 			keyFieldInfo, exists := typeDetails.StructFields[safePropKey]
@@ -688,16 +688,18 @@ func unmarshalNodeToStruct(c *unmarshalContext, node *document.Node, destStruct 
 			if field, err = setReflectValueFromIntf(c, field, propVal.ResolvedValue(), keyFieldInfo.Format); err != nil {
 				return reflect.Value{}, err
 			}
-			handledProps++
+			handledProps = append(handledProps, propKey)
 		}
 
 		havePropsField := len(propsFieldInfo) > 0
-		if !c.opts.AllowUnhandledProps && !havePropsField && handledProps < node.Properties.Len() {
+		if !c.opts.AllowUnhandledProps && !havePropsField && len(handledProps) < node.Properties.Len() {
 			extraProps := make([]string, 0, node.Properties.Len())
 			for name := range node.Properties.Unordered() {
-				extraProps = append(extraProps, name)
+				if !inStrSlice(handledProps, name) {
+					extraProps = append(extraProps, name)
+				}
 			}
-			return reflect.Value{}, fmt.Errorf("%s has unexpected properties %s", node.Name.ValueString(), strings.Join(extraProps, ", "))
+			return reflect.Value{}, fmt.Errorf("%s has unexpected properties: %s", node.Name.ValueString(), strings.Join(extraProps, ", "))
 		}
 
 		// if we have a struct field tagged with ",props" and it's a map, add all of the properties to it

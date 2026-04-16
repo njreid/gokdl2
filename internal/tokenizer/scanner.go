@@ -785,13 +785,19 @@ func (s *Scanner) extractLineAtOffset(offset int) string {
 	if len(s.raw) == 0 {
 		return "^"
 	}
-	if offset >= len(s.raw) {
-		offset = len(s.raw) - 1
-	}
 	if offset < 0 {
 		offset = 0
 	}
-	start := offset
+	if offset > len(s.raw) {
+		offset = len(s.raw)
+	}
+
+	search := offset
+	if search == len(s.raw) {
+		search--
+	}
+
+	start := search
 	for start > 0 {
 		start--
 		if isNewline(rune(s.raw[start])) {
@@ -800,12 +806,9 @@ func (s *Scanner) extractLineAtOffset(offset int) string {
 		}
 	}
 
-	end := offset
-	for end < len(s.raw)-1 {
+	end := start
+	for end < len(s.raw) && !isNewline(rune(s.raw[end])) {
 		end++
-		if isNewline(rune(s.raw[end])) {
-			break
-		}
 	}
 	caretOffset := offset - start + 1
 
@@ -815,7 +818,7 @@ func (s *Scanner) extractLineAtOffset(offset int) string {
 		caretOffset = 64
 	}
 
-	line := make([]byte, 0, end-start+1+1+caretOffset)
+	line := make([]byte, 0, end-start+1+caretOffset)
 	line = append(line, s.raw[start:end]...)
 	for i, c := range line {
 		if c == '\t' {
@@ -834,6 +837,44 @@ func (s *Scanner) extractLineAtOffset(offset int) string {
 	line = append(line, '^')
 
 	return string(line)
+}
+
+// ExtractLineAtPosition formats the source line and caret for a 1-based line/column pair.
+func (s *Scanner) ExtractLineAtPosition(line, column int) string {
+	if len(s.raw) == 0 {
+		return "^"
+	}
+	if line < 1 {
+		line = 1
+	}
+	if column < 1 {
+		column = 1
+	}
+
+	currentLine := 1
+	lineStart := 0
+	for i := 0; i < len(s.raw) && currentLine < line; i++ {
+		if isNewline(rune(s.raw[i])) {
+			currentLine++
+			lineStart = i + 1
+		}
+	}
+
+	lineEnd := lineStart
+	for lineEnd < len(s.raw) && !isNewline(rune(s.raw[lineEnd])) {
+		lineEnd++
+	}
+
+	lineWidth := lineEnd - lineStart + 1
+	if column > lineWidth {
+		column = lineWidth
+	}
+
+	offset := lineStart + column - 1
+	if offset >= len(s.raw) {
+		offset = len(s.raw) - 1
+	}
+	return s.extractLineAtOffset(offset)
 }
 
 // annotatedError annotates err with the input line/column and positionSummary from the input buffer
@@ -959,6 +1000,9 @@ func (s *Scanner) Scan() bool {
 		return true
 	} else if s.err == io.EOF {
 		s.token = eofToken
+		s.token.Line = s.line
+		s.token.Column = s.column
+		s.token.Version = s.Version
 		return true
 	} else {
 		s.err = s.annotatedError(s.err)

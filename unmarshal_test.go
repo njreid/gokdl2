@@ -1332,6 +1332,29 @@ map key="skipped" key="value"
 	}
 }
 
+func TestUnhandledPropsReportOnlyUnhandledNames(t *testing.T) {
+	type person struct {
+		Name string `kdl:"name"`
+	}
+	type config struct {
+		Person person `kdl:"person"`
+	}
+
+	var got config
+	err := Unmarshal([]byte("person name=\"Bob\" age=42\n"), &got)
+	if err == nil {
+		t.Fatal("Unmarshal() error = nil, want error")
+	}
+
+	msg := err.Error()
+	if !strings.Contains(msg, "person has unexpected properties: age") {
+		t.Fatalf("Unmarshal() error = %q, want unexpected age only", msg)
+	}
+	if strings.Contains(msg, "name") {
+		t.Fatalf("Unmarshal() error = %q, should not include handled property name", msg)
+	}
+}
+
 /*
 These tests cannot be run as part of a larger batch as the AddCustomUnmarshaler calls will panic given that other tests
 have already created Indexers. Uncomment and run individually to test custom unmarshaling.

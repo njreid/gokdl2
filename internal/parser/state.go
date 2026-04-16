@@ -22,25 +22,25 @@ const (
 func (p parserState) String() string {
 	switch p {
 	case stateDocument:
-		return "stateDocument"
+		return "document"
 	case stateNode:
-		return "stateNode"
+		return "node"
 	case stateNodeParams:
-		return "stateNodeParams"
+		return "node parameters"
 	case stateNodeEnd:
-		return "stateNodeEnd"
+		return "node end"
 	case stateArgProp:
-		return "stateArgProp"
+		return "argument or property"
 	case stateProperty:
-		return "stateProperty"
+		return "property"
 	case statePropertyValue:
-		return "statePropertyValue"
+		return "property value"
 	case stateChildren:
-		return "stateChildren"
+		return "children"
 	case stateTypeAnnot:
-		return "stateTypeAnnot"
+		return "type annotation"
 	case stateTypeDone:
-		return "stateTypeDone"
+		return "type annotation close"
 	default:
 		return strconv.FormatInt(int64(p), 10)
 	}

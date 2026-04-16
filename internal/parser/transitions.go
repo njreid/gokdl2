@@ -2,7 +2,6 @@ package parser
 
 import (
 	"bytes"
-	"fmt"
 
 	"github.com/njreid/gokdl2/document"
 	"github.com/njreid/gokdl2/internal/tokenizer"
@@ -20,7 +19,7 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 		tokenizer.Whitespace: func(c *ParseContext, t tokenizer.Token) error {
 			// cannot insert whitespace immediately after type annotation in v1, for... reasons
 			if c.typeAnnot.Valid() && c.opts.Version != tokenizer.VersionV2 {
-				return fmt.Errorf("unexpected %s in state %s", t.ID, c.state)
+				return unexpectedToken(c, t)
 			}
 			return nil
 		},
@@ -61,7 +60,7 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 		},
 		tokenizer.ClassTerminator: func(c *ParseContext, t tokenizer.Token) error {
 			if c.typeAnnot.Valid() {
-				return fmt.Errorf("expected value after type, found %s in state %s", t.ID, c.state)
+				return expectedValueAfterType(c, t)
 			}
 
 			// ignore extraneous newlines, semicolons, and EOF
@@ -69,7 +68,7 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 		},
 		tokenizer.ClassComment: func(c *ParseContext, t tokenizer.Token) error {
 			if c.typeAnnot.Valid() && c.opts.Version != tokenizer.VersionV2 {
-				return fmt.Errorf("unexpected %s in state %s", t.ID, c.state)
+				return unexpectedToken(c, t)
 			}
 			if c.opts.Flags.Has(ParseComments) {
 				c.comment.Write(c.recent.TrailingNewlines())
@@ -79,7 +78,7 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 		},
 		tokenizer.TokenComment: func(c *ParseContext, t tokenizer.Token) error {
 			if c.typeAnnot.Valid() {
-				return fmt.Errorf("unexpected %s in state %s", t.ID, c.state)
+				return unexpectedToken(c, t)
 			}
 			c.markIgnoreFromContinuation()
 			c.ignoreNextNode = true
@@ -94,13 +93,13 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 		tokenizer.Whitespace: func(c *ParseContext, t tokenizer.Token) error {
 			// cannot insert whitespace immediately after type annotation in v1, for... reasons
 			if c.typeAnnot.Valid() && c.opts.Version != tokenizer.VersionV2 {
-				return fmt.Errorf("unexpected %s in state %s", t.ID, c.state)
+				return unexpectedToken(c, t)
 			}
 			return nil
 		},
 		tokenizer.ClassComment: func(c *ParseContext, t tokenizer.Token) error {
 			if c.typeAnnot.Valid() && c.opts.Version != tokenizer.VersionV2 {
-				return fmt.Errorf("unexpected %s in state %s", t.ID, c.state)
+				return unexpectedToken(c, t)
 			}
 
 			if c.opts.Flags.Has(ParseComments) {
@@ -116,7 +115,7 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 		},
 		tokenizer.TokenComment: func(c *ParseContext, t tokenizer.Token) error {
 			if c.typeAnnot.Valid() {
-				return fmt.Errorf("unexpected %s in state %s", t.ID, c.state)
+				return unexpectedToken(c, t)
 			}
 			c.markIgnoreFromContinuation()
 			c.ignoreNextNode = true
@@ -162,7 +161,7 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 		},
 		tokenizer.BraceClose: func(c *ParseContext, t tokenizer.Token) error {
 			if c.ignoreNextNode {
-				return fmt.Errorf("unexpected %s in state %s", t.ID, c.state)
+				return unexpectedToken(c, t)
 			}
 			if c.ignoreChildren > 0 {
 				c.ignoreChildren--
@@ -192,19 +191,19 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 	stateTypeAnnot: {
 		tokenizer.Whitespace: func(c *ParseContext, t tokenizer.Token) error {
 			if c.opts.Version != tokenizer.VersionV2 {
-				return fmt.Errorf("unexpected %s in state %s", t.ID, c.state)
+				return unexpectedToken(c, t)
 			}
 			return nil
 		},
 		tokenizer.ClassComment: func(c *ParseContext, t tokenizer.Token) error {
 			if c.opts.Version != tokenizer.VersionV2 {
-				return fmt.Errorf("unexpected %s in state %s", t.ID, c.state)
+				return unexpectedToken(c, t)
 			}
 			return nil
 		},
 		tokenizer.Continuation: func(c *ParseContext, t tokenizer.Token) error {
 			if c.opts.Version != tokenizer.VersionV2 {
-				return fmt.Errorf("unexpected %s in state %s", t.ID, c.state)
+				return unexpectedToken(c, t)
 			}
 			c.startContinuation()
 			return nil
@@ -223,19 +222,19 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 	stateTypeDone: {
 		tokenizer.Whitespace: func(c *ParseContext, t tokenizer.Token) error {
 			if c.opts.Version != tokenizer.VersionV2 {
-				return fmt.Errorf("unexpected %s in state %s", t.ID, c.state)
+				return unexpectedToken(c, t)
 			}
 			return nil
 		},
 		tokenizer.ClassComment: func(c *ParseContext, t tokenizer.Token) error {
 			if c.opts.Version != tokenizer.VersionV2 {
-				return fmt.Errorf("unexpected %s in state %s", t.ID, c.state)
+				return unexpectedToken(c, t)
 			}
 			return nil
 		},
 		tokenizer.Continuation: func(c *ParseContext, t tokenizer.Token) error {
 			if c.opts.Version != tokenizer.VersionV2 {
-				return fmt.Errorf("unexpected %s in state %s", t.ID, c.state)
+				return unexpectedToken(c, t)
 			}
 			c.startContinuation()
 			return nil
@@ -263,7 +262,7 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 				c.state = stateNodeParams
 				return nil
 			} else {
-				return fmt.Errorf("unexpected %s in state %s", t.ID, c.state)
+				return unexpectedToken(c, t)
 			}
 		},
 		tokenizer.BraceOpen: func(c *ParseContext, t tokenizer.Token) error {
@@ -284,7 +283,7 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			if c.opts.Version == tokenizer.VersionV2 {
 				return nil
 			}
-			return fmt.Errorf("unexpected %s in state %s", t.ID, c.state)
+			return unexpectedToken(c, t)
 		},
 		tokenizer.BraceClose: func(c *ParseContext, t tokenizer.Token) error {
 			_, _, err := c.popNodeAndState()
@@ -298,7 +297,7 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 		tokenizer.Whitespace: func(c *ParseContext, t tokenizer.Token) error {
 			// cannot insert whitespace immediately after type annotation in v1, for... reasons
 			if c.typeAnnot.Valid() && c.opts.Version != tokenizer.VersionV2 {
-				return fmt.Errorf("unexpected %s in state %s", t.ID, c.state)
+				return unexpectedToken(c, t)
 			}
 			return nil
 		},
@@ -307,12 +306,12 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 				// ignore
 				return nil
 			} else {
-				return fmt.Errorf("unexpected %s in state %s", t.ID, c.state)
+				return unexpectedToken(c, t)
 			}
 		},
 		tokenizer.TokenComment: func(c *ParseContext, t tokenizer.Token) error {
 			if c.typeAnnot.Valid() {
-				return fmt.Errorf("unexpected %s in state %s", t.ID, c.state)
+				return unexpectedToken(c, t)
 			}
 			c.markIgnoreFromContinuation()
 			c.ignoreNextArgProp = true
@@ -321,7 +320,7 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 		tokenizer.ClassComment: func(c *ParseContext, t tokenizer.Token) error {
 			// cannot insert comment immediately after type annotation in v1, for... reasons
 			if c.typeAnnot.Valid() && c.opts.Version != tokenizer.VersionV2 {
-				return fmt.Errorf("unexpected %s in state %s", t.ID, c.state)
+				return unexpectedToken(c, t)
 			}
 			return nil
 		},
@@ -416,9 +415,9 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 				if t.ID == tokenizer.Newline {
 					return nil
 				}
-				return fmt.Errorf("unexpected %s in state %s", t.ID, c.state)
+				return unexpectedToken(c, t)
 			} else if c.typeAnnot.Valid() {
-				return fmt.Errorf("expected value after type, found %s in state %s", t.ID, c.state)
+				return expectedValueAfterType(c, t)
 			} else {
 				_, _, err := c.popNodeAndState()
 				return err
@@ -444,7 +443,7 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 		tokenizer.Equals: func(c *ParseContext, t tokenizer.Token) error {
 			// cannot cannot use a type annotation on a property key
 			if c.typeAnnot.Valid() {
-				return fmt.Errorf("unexpected %s in state %s", t.ID, c.state)
+				return unexpectedToken(c, t)
 			}
 
 			// equals is the only valid value after a bare-identifier property name
@@ -472,7 +471,7 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 				c.typeAnnot.Clear()
 				c.ident.Clear()
 			} else if c.typeAnnot.Valid() {
-				return fmt.Errorf("expected value after type, found %s in state %s", t.ID, c.state)
+				return expectedValueAfterType(c, t)
 			}
 
 			c.ignoreNextArgProp = true
@@ -506,7 +505,7 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			// cannot cannot use a type annotation on a property key
 			// cannot use anything but an identifier or string as a property name
 			if c.typeAnnot.Valid() || (c.ident.ID != tokenizer.BareIdentifier && c.ident.ID != tokenizer.QuotedString && c.ident.ID != tokenizer.RawString) {
-				return fmt.Errorf("unexpected %s in state %s", t.ID, c.state)
+				return unexpectedToken(c, t)
 			}
 
 			// equals indicates that it's a property
@@ -536,7 +535,7 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			if c.opts.Version == tokenizer.VersionV2 {
 				return nil
 			}
-			return fmt.Errorf("unexpected %s in state %s", t.ID, c.state)
+			return unexpectedToken(c, t)
 		},
 
 		tokenizer.Continuation: func(c *ParseContext, t tokenizer.Token) error {
@@ -599,19 +598,19 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 	statePropertyValue: {
 		tokenizer.Whitespace: func(c *ParseContext, t tokenizer.Token) error {
 			if c.opts.Version != tokenizer.VersionV2 {
-				return fmt.Errorf("unexpected %s in state %s", t.ID, c.state)
+				return unexpectedToken(c, t)
 			}
 			return nil
 		},
 		tokenizer.ClassComment: func(c *ParseContext, t tokenizer.Token) error {
 			if c.opts.Version != tokenizer.VersionV2 {
-				return fmt.Errorf("unexpected %s in state %s", t.ID, c.state)
+				return unexpectedToken(c, t)
 			}
 			return nil
 		},
 		tokenizer.Continuation: func(c *ParseContext, t tokenizer.Token) error {
 			if c.opts.Version != tokenizer.VersionV2 {
-				return fmt.Errorf("unexpected %s in state %s", t.ID, c.state)
+				return unexpectedToken(c, t)
 			}
 			c.startContinuation()
 			return nil

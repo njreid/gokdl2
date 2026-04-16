@@ -1,6 +1,7 @@
 package kdl
 
 import (
+	"fmt"
 	"io"
 
 	"github.com/njreid/gokdl2/document"
@@ -76,8 +77,9 @@ func parseOne(s *tokenizer.Scanner, inputSizeEstimate int) (*document.Document, 
 	}
 	c := p.NewContextOptions(opts)
 	for s.Scan() {
-		if err := p.Parse(c, s.Token()); err != nil {
-			return nil, err
+		tok := s.Token()
+		if err := p.Parse(c, tok); err != nil {
+			return nil, fmt.Errorf("parse failed: %w at line %d, column %d\n%s", err, tok.Line+1, tok.Column+1, s.ExtractLineAtPosition(tok.Line+1, tok.Column+1))
 		}
 	}
 	if s.Err() != nil {

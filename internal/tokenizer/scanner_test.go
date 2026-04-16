@@ -539,7 +539,6 @@ func TestTokenizeTestCases(t *testing.T) {
 	}
 }
 
-
 func runTestCases(testCases map[string]kdlTestCase, alternate bool) error {
 	for testCase, tc := range testCases {
 		scanner := NewSlice(tc.input)
@@ -757,7 +756,7 @@ lines */
 		{137, "  small-integer-signed -3\n                       ^"},
 		{690, "  multiline-comment-at-end 42 /* comment\n        ^"},
 		{817, "  comment-at-end 42 // this is a comment\n             ^"},
-		{1450, "}\n ^"},
+		{1450, "}\n  ^"},
 	}
 	for _, tt := range tests {
 		t.Run(fmt.Sprintf("offset-%d", tt.offset), func(t *testing.T) {
@@ -842,7 +841,7 @@ func TestScannerV2(t *testing.T) {
 			if s.Err() != nil && tt.expect[len(tt.expect)-1] != Unknown {
 				t.Errorf("unexpected error: %v", s.Err())
 			}
-			
+
 			// for bare keyword rejection, we expect an error and Unknown token
 			if tt.expect[0] == Unknown {
 				if s.Err() == nil {
