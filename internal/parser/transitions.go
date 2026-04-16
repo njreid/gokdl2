@@ -34,7 +34,7 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 				node = c.addNode()
 			}
 
-			if err := node.SetNameToken(t); err != nil {
+			if err := c.setNodeNameToken(node, t); err != nil {
 				return err
 			}
 
@@ -140,7 +140,7 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			} else {
 				node = c.addNode()
 			}
-			if err := node.SetNameToken(t); err != nil {
+			if err := c.setNodeNameToken(node, t); err != nil {
 				return err
 			}
 
@@ -369,7 +369,7 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 
 			if c.ignoreNextArgProp {
 				c.ignoreNextArgProp = false
-			} else if err := c.currentNode().AddArgumentToken(t, c.typeAnnot); err != nil {
+			} else if err := c.addArgumentToken(c.currentNode(), t, c.typeAnnot); err != nil {
 				return err
 			}
 
@@ -391,7 +391,7 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			// a numeric value inside a node declaration is always an argument
 			if c.ignoreNextArgProp {
 				c.ignoreNextArgProp = false
-			} else if err := c.currentNode().AddArgumentToken(t, c.typeAnnot); err != nil {
+			} else if err := c.addArgumentToken(c.currentNode(), t, c.typeAnnot); err != nil {
 				return err
 			}
 
@@ -464,7 +464,7 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			if c.ignoreNextArgProp {
 				c.ignoreNextArgProp = false
 			} else if c.ident.Valid() {
-				if err := c.currentNode().AddArgumentToken(c.ident, c.typeAnnot); err != nil {
+				if err := c.addArgumentToken(c.currentNode(), c.ident, c.typeAnnot); err != nil {
 					return err
 				}
 			}
@@ -487,7 +487,7 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			if c.ident.Valid() {
 				if c.ignoreNextArgProp {
 					c.ignoreNextArgProp = false
-				} else if err := c.currentNode().AddArgumentToken(c.ident, c.typeAnnot); err != nil {
+				} else if err := c.addArgumentToken(c.currentNode(), c.ident, c.typeAnnot); err != nil {
 					return err
 				}
 				c.typeAnnot.Clear()
@@ -522,7 +522,7 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			// whitespace indicates it was definitely an arg, not a prop
 			if c.ignoreNextArgProp {
 				c.ignoreNextArgProp = false
-			} else if err := c.currentNode().AddArgumentToken(c.ident, c.typeAnnot); err != nil {
+			} else if err := c.addArgumentToken(c.currentNode(), c.ident, c.typeAnnot); err != nil {
 				return err
 			}
 			c.typeAnnot.Clear()
@@ -552,7 +552,7 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 				// if we're at the end of the node and have an identifier but didn't find an equal sign, it was just an argument
 				if c.ignoreNextArgProp {
 					c.ignoreNextArgProp = false
-				} else if err := c.currentNode().AddArgumentToken(c.ident, c.typeAnnot); err != nil {
+				} else if err := c.addArgumentToken(c.currentNode(), c.ident, c.typeAnnot); err != nil {
 					return err
 				}
 				c.typeAnnot.Clear()
@@ -567,7 +567,7 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			// if we found a value, but we already have an identifier queued, it was an argument, so save it
 			if c.ignoreNextArgProp {
 				c.ignoreNextArgProp = false
-			} else if err := c.currentNode().AddArgumentToken(c.ident, c.typeAnnot); err != nil {
+			} else if err := c.addArgumentToken(c.currentNode(), c.ident, c.typeAnnot); err != nil {
 				return err
 			}
 			c.typeAnnot.Clear()
@@ -582,7 +582,7 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 				// if we're at the end of the node and have an identifier but didn't find an equal sign, it was just an argument
 				if c.ignoreNextArgProp {
 					c.ignoreNextArgProp = false
-				} else if err := c.currentNode().AddArgumentToken(c.ident, c.typeAnnot); err != nil {
+				} else if err := c.addArgumentToken(c.currentNode(), c.ident, c.typeAnnot); err != nil {
 					return err
 				}
 				c.typeAnnot.Clear()
@@ -624,7 +624,7 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 		tokenizer.ClassValue: func(c *ParseContext, t tokenizer.Token) error {
 			if c.ignoreNextArgProp {
 				c.ignoreNextArgProp = false
-			} else if _, err := c.currentNode().AddPropertyToken(c.ident, t, c.typeAnnot); err != nil {
+			} else if _, err := c.addPropertyToken(c.currentNode(), c.ident, t, c.typeAnnot); err != nil {
 				return err
 			}
 			c.typeAnnot.Clear()

@@ -8,6 +8,7 @@ import (
 	"math/big"
 	"strconv"
 	"strings"
+	"unsafe"
 
 	"github.com/njreid/gokdl2/internal/tokenizer"
 )
@@ -434,26 +435,64 @@ func isNonzeroSciNot(b []byte) bool {
 	return false
 }
 
+func bytesToString(b []byte) string {
+	if len(b) == 0 {
+		return ""
+	}
+	return *(*string)(unsafe.Pointer(&b))
+}
+
+func classifyNumber(b []byte, base int) (underscoreCount int, isFloat bool) {
+	for _, c := range b {
+		switch c {
+		case '_':
+			underscoreCount++
+		case '.':
+			isFloat = true
+		case 'e', 'E':
+			if base == 10 {
+				isFloat = true
+			}
+		}
+	}
+	return underscoreCount, isFloat
+}
+
+func stripUnderscores(b []byte, underscoreCount int) []byte {
+	if underscoreCount == 0 {
+		return b
+	}
+
+	clean := make([]byte, 0, len(b)-underscoreCount)
+	for _, c := range b {
+		if c != '_' {
+			clean = append(clean, c)
+		}
+	}
+	return clean
+}
+
 // parseNumber parses a number from b in the specified base, and returns an interface{} containing either a float64,
 // an int64, a *big.Float, or a *big.Int, depending on the size and type of the number in b
 func parseNumber(b []byte, base int) (interface{}, error) {
 	if base != 10 {
 		b = b[2:] // strip 0x, 0o, 0b
 	}
-	b = bytes.ReplaceAll(b, []byte{'_'}, []byte{})
+	underscoreCount, float := classifyNumber(b, base)
+	b = stripUnderscores(b, underscoreCount)
+	bstr := bytesToString(b)
 
 	var (
 		v   interface{}
 		err error
 	)
-	float := bytes.IndexByte(b, '.') != -1 || (base == 10 && (bytes.IndexByte(b, 'e') != -1 || bytes.IndexByte(b, 'E') != -1))
 	if float {
 		if base != 10 {
-			return nil, fmt.Errorf("parsing number %s: floating point numbers must be base 10 only", string(b))
+			return nil, fmt.Errorf("parsing number %s: floating point numbers must be base 10 only", bstr)
 		}
 
 		var f float64
-		f, err = strconv.ParseFloat(string(b), 64)
+		f, err = strconv.ParseFloat(bstr, 64)
 
 		// ParseFloat doesn't seem to generate ErrRange for tiny numbers in scientific notation (eg: 1.23E-1000); it
 		// just returns 0, which is wrong. So if ParseFloat returns 0.0 and b contains a nonzero coefficient, we reparse
@@ -461,24 +500,24 @@ func parseNumber(b []byte, base int) (interface{}, error) {
 		if errors.Is(err, strconv.ErrRange) || (err == nil && f == 0.0 && isNonzeroSciNot(b)) {
 			err = nil
 			n := big.NewFloat(0)
-			n.SetString(string(b))
+			n.SetString(bstr)
 			v = n
 		} else {
 			v = f
 		}
 
 	} else {
-		v, err = strconv.ParseInt(string(b), base, 64)
+		v, err = strconv.ParseInt(bstr, base, 64)
 		if errors.Is(err, strconv.ErrRange) {
 			err = nil
 			n := big.NewInt(0)
-			n.SetString(string(b), base)
+			n.SetString(bstr, base)
 			v = n
 		}
 	}
 
 	if err != nil {
-		err = fmt.Errorf("parsing number %s: %w", string(b), err)
+		err = fmt.Errorf("parsing number %s: %w", bstr, err)
 	}
 	return v, err
 
@@ -486,9 +525,9 @@ func parseNumber(b []byte, base int) (interface{}, error) {
 
 // unquoteQuotedTokenString parses a quoted KDL string token and returns the unquoted string.
 func unquoteQuotedTokenString(b []byte) (string, error) {
-	v, err := UnquoteString(string(b))
+	v, err := UnquoteString(bytesToString(b))
 	if err != nil {
-		err = fmt.Errorf("parsing quoted string %s: %w", string(b), err)
+		err = fmt.Errorf("parsing quoted string %s: %w", bytesToString(b), err)
 	}
 	return v, err
 }
@@ -529,7 +568,7 @@ func isMultilineExpressionToken(s string) bool {
 }
 
 func keywordValue(data []byte) (interface{}, error) {
-	switch string(data) {
+	switch bytesToString(data) {
 	case "#inf":
 		return math.Inf(1), nil
 	case "#-inf":
@@ -544,10 +583,19 @@ func keywordValue(data []byte) (interface{}, error) {
 // ValueFromToken creates and returns a Value representing the content of t, or a non-nil error on failure
 func ValueFromToken(t tokenizer.Token) (*Value, error) {
 	v := &Value{}
+	if err := ValueFromTokenInto(v, t); err != nil {
+		return nil, err
+	}
+	return v, nil
+}
+
+// ValueFromTokenInto decodes t into v.
+func ValueFromTokenInto(v *Value, t tokenizer.Token) error {
+	*v = Value{}
 	var err error
 	switch t.ID {
 	case tokenizer.QuotedString:
-		s := string(t.Data)
+		s := bytesToString(t.Data)
 		if isMultilineStringToken(s) {
 			v.Value, v.RawHashes, err = UnquoteMultiLineString(s)
 			v.Flag = FlagMultiLine
@@ -560,7 +608,7 @@ func ValueFromToken(t tokenizer.Token) (*Value, error) {
 			v.Flag = FlagQuoted
 		}
 	case tokenizer.ExpressionString:
-		s := string(t.Data)
+		s := bytesToString(t.Data)
 		if isMultilineExpressionToken(s) {
 			var expr string
 			expr, err = UnquoteMultiLineExpressionString(s)
@@ -573,7 +621,7 @@ func ValueFromToken(t tokenizer.Token) (*Value, error) {
 			v.Flag = FlagExpression
 		}
 	case tokenizer.BareIdentifier:
-		v.Value = string(t.Data)
+		v.Value = bytesToString(t.Data)
 		v.Flag = FlagBare
 	case tokenizer.Binary:
 		v.Value, err = parseNumber(t.Data, 2)
@@ -603,5 +651,5 @@ func ValueFromToken(t tokenizer.Token) (*Value, error) {
 		err = fmt.Errorf("value from token: %w", err)
 	}
 
-	return v, err
+	return err
 }

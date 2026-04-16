@@ -23,6 +23,7 @@ type ParseContextOptions struct {
 	RelaxedNonCompliant relaxed.Flags
 	Flags               ParseFlags
 	Version             tokenizer.Version // VersionAuto, VersionV1, or VersionV2
+	InputSizeEstimate   int
 }
 
 var defaultParseContextOptions = ParseContextOptions{
@@ -67,6 +68,7 @@ type ParseContext struct {
 
 	lastAddedNode *document.Node
 	recent        recentTokens
+	alloc         *document.Allocator
 
 	// VersionSetter is called when a /- kdl-version N marker is detected; used to update the scanner version
 	VersionSetter func(tokenizer.Version)
@@ -98,7 +100,7 @@ func (c *ParseContext) Document() *document.Document {
 }
 
 func (c *ParseContext) addNode() *document.Node {
-	n := document.NewNode()
+	n := c.newNode()
 	if len(c.node) > 0 {
 		c.node[len(c.node)-1].AddNode(n)
 	} else {
@@ -110,10 +112,60 @@ func (c *ParseContext) addNode() *document.Node {
 }
 
 func (c *ParseContext) createNode() *document.Node {
-	n := document.NewNode()
+	n := c.newNode()
 	c.node = append(c.node, n)
 	c.lastAddedNode = n
 	return n
+}
+
+func (c *ParseContext) newNode() *document.Node {
+	if c.alloc != nil {
+		return c.alloc.NewNode()
+	}
+	return document.NewNode()
+}
+
+func (c *ParseContext) newValue() *document.Value {
+	if c.alloc != nil {
+		return c.alloc.NewValue()
+	}
+	return &document.Value{}
+}
+
+func (c *ParseContext) setNodeNameToken(n *document.Node, t tokenizer.Token) error {
+	v := c.newValue()
+	if err := document.ValueFromTokenInto(v, t); err != nil {
+		return err
+	}
+	n.SetNameValue(v)
+	return nil
+}
+
+func (c *ParseContext) addArgumentToken(n *document.Node, t tokenizer.Token, typeAnnot tokenizer.Token) error {
+	v := c.newValue()
+	if err := document.ValueFromTokenInto(v, t); err != nil {
+		return err
+	}
+	if typeAnnot.Valid() {
+		v.Type = document.TypeAnnotation(typeAnnot.Data)
+	}
+	n.AddArgumentValue(v)
+	return nil
+}
+
+func (c *ParseContext) addPropertyToken(n *document.Node, name tokenizer.Token, value tokenizer.Token, typeAnnot tokenizer.Token) (*document.Value, error) {
+	nt := c.newValue()
+	if err := document.ValueFromTokenInto(nt, name); err != nil {
+		return nil, err
+	}
+	vt := c.newValue()
+	if err := document.ValueFromTokenInto(vt, value); err != nil {
+		return nil, err
+	}
+	if typeAnnot.Valid() {
+		vt.Type = document.TypeAnnotation(typeAnnot.Data)
+	}
+	return n.AddPropertyValue(nt.ValueString(), vt, ""), nil
 }
 
 var errNodeStackEmpty = errors.New("node stack empty")

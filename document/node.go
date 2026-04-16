@@ -73,6 +73,10 @@ func (n *Node) SetName(name string) {
 	n.Name = &Value{Value: name}
 }
 
+func (n *Node) SetNameValue(v *Value) {
+	n.Name = v
+}
+
 // SetNameToken sets the name of the node from a Token, and returns a non-nil error on failure
 func (n *Node) SetNameToken(t tokenizer.Token) error {
 	v, err := ValueFromToken(t)
@@ -90,6 +94,11 @@ func (n *Node) AddArgument(value interface{}, typeAnnot TypeAnnotation) *Value {
 		Value: value,
 		Type:  typeAnnot,
 	}
+	n.Arguments = append(n.Arguments, v)
+	return v
+}
+
+func (n *Node) AddArgumentValue(v *Value) *Value {
 	n.Arguments = append(n.Arguments, v)
 	return v
 }
@@ -124,6 +133,9 @@ func (n *Node) AddProperty(name string, value interface{}, typeAnnot TypeAnnotat
 }
 
 func (n *Node) AddPropertyValue(name string, value *Value, typeAnnot TypeAnnotation) *Value {
+	if typeAnnot != "" {
+		value.Type = typeAnnot
+	}
 	if !n.Properties.Allocated() {
 		n.Properties.Alloc()
 	}

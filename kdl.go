@@ -26,9 +26,9 @@ func (v ParseVersion) tokenizerVersion() tokenizer.Version {
 	return tokenizer.Version(v)
 }
 
-func parse(s *tokenizer.Scanner) (*document.Document, error) {
+func parse(s *tokenizer.Scanner, inputSizeEstimate int) (*document.Document, error) {
 	if s.Version != tokenizer.VersionAuto {
-		return parseOne(s)
+		return parseOne(s, inputSizeEstimate)
 	}
 
 	// for VersionAuto, we need to be able to retry if the first attempt fails
@@ -43,7 +43,7 @@ func parse(s *tokenizer.Scanner) (*document.Document, error) {
 	s2.RelaxedNonCompliant = s.RelaxedNonCompliant
 	s2.ParseComments = s.ParseComments
 	s2.Version = tokenizer.VersionV2
-	doc, err := parseOne(s2)
+	doc, err := parseOne(s2, len(data))
 	if err == nil {
 		return doc, nil
 	}
@@ -59,16 +59,17 @@ func parse(s *tokenizer.Scanner) (*document.Document, error) {
 	s1.RelaxedNonCompliant = s.RelaxedNonCompliant
 	s1.ParseComments = s.ParseComments
 	s1.Version = tokenizer.VersionV1
-	return parseOne(s1)
+	return parseOne(s1, len(data))
 }
 
-func parseOne(s *tokenizer.Scanner) (*document.Document, error) {
+func parseOne(s *tokenizer.Scanner, inputSizeEstimate int) (*document.Document, error) {
 	defer s.Close()
 
 	p := parser.New()
 	opts := parser.ParseContextOptions{
 		RelaxedNonCompliant: s.RelaxedNonCompliant,
 		Version:             s.Version,
+		InputSizeEstimate:   inputSizeEstimate,
 	}
 	if s.ParseComments {
 		opts.Flags |= parser.ParseComments
@@ -86,6 +87,22 @@ func parseOne(s *tokenizer.Scanner) (*document.Document, error) {
 	doc := c.Document()
 	doc.Version = int(s.Version)
 	return doc, nil
+}
+
+func estimateReaderSize(r io.Reader) int {
+	type lenner interface{ Len() int }
+	type sizer interface{ Size() int64 }
+
+	if lr, ok := r.(lenner); ok {
+		return lr.Len()
+	}
+	if sr, ok := r.(sizer); ok {
+		sz := sr.Size()
+		if sz > 0 && sz <= int64(^uint(0)>>1) {
+			return int(sz)
+		}
+	}
+	return 0
 }
 
 type ParseOptions struct {
@@ -107,11 +124,12 @@ func Parse(r io.Reader) (*document.Document, error) {
 }
 
 func ParseWithOptions(r io.Reader, opts ParseOptions) (*document.Document, error) {
+	sizeEstimate := estimateReaderSize(r)
 	s := tokenizer.New(r)
 	s.RelaxedNonCompliant = opts.RelaxedNonCompliant
 	s.ParseComments = opts.ParseComments
 	s.Version = opts.Version.tokenizerVersion()
-	return parse(s)
+	return parse(s, sizeEstimate)
 }
 
 type GenerateOptions = generator.Options

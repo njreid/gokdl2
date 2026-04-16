@@ -376,6 +376,11 @@ func (s *Scanner) Offset() int {
 	return len(s.raw) - len(s.input)
 }
 
+// SizeEstimate returns the currently buffered input size for allocation heuristics.
+func (s *Scanner) SizeEstimate() int {
+	return len(s.raw)
+}
+
 type staticScanner struct {
 	s  Scanner
 	mu sync.Mutex
