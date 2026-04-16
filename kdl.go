@@ -78,7 +78,14 @@ func parseOne(s *tokenizer.Scanner, inputSizeEstimate int) (*document.Document, 
 	c := p.NewContextOptions(opts)
 	for s.Scan() {
 		tok := s.Token()
-		if err := p.Parse(c, tok); err != nil {
+		for {
+			err := p.Parse(c, tok)
+			if err == nil {
+				break
+			}
+			if err == parser.ErrReenterState {
+				continue
+			}
 			return nil, fmt.Errorf("parse failed: %w at line %d, column %d\n%s", err, tok.Line+1, tok.Column+1, s.ExtractLineAtPosition(tok.Line+1, tok.Column+1))
 		}
 	}

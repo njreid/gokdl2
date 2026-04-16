@@ -64,6 +64,8 @@ Detailed marshaling and unmarshaling behavior is documented in [docs/marshal.md]
 
 The repository vendors the official parser compliance suites for both KDL versions.
 
+It also supports the broader [`kdl-org/kdl-test`](https://github.com/kdl-org/kdl-test) compatibility suite through `TestKDLTestSuite` when the suite is checked out locally at `../kdl-test` or exposed via `KDL_TEST_SUITE_DIR`.
+
 Run the normal test suite:
 
 ```bash
