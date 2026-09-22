@@ -634,6 +634,54 @@ lines */
 	}
 }
 
+func TestParser_BufferedReader(t *testing.T) {
+	const node = "node (ty)\"arg\" name=\"alpha\" 0xdeadbeef r#\"raw \"x\" str\"# { child -3.1e-20; }\n"
+	input := strings.Builder{}
+	for i := 0; i <= len(node); i++ {
+		input.WriteString(node)
+	}
+
+	// the slice scanner has everything in one buffer, so there's never a buffering problem
+	sliceScanner := tokenizer.NewSlice([]byte(input.String()))
+	want := parseAndGenerate(t, sliceScanner)
+
+	// the buffer scanner has a "window" and with a buffer that is one byte shorter than the repeated
+	// node, every byte of the repeated node will fall on a buffer boundary
+	streamingScanner := tokenizer.NewBuffer(strings.NewReader(input.String()), make([]byte, len(node)-1))
+	got := parseAndGenerate(t, streamingScanner)
+
+	wantLines, gotLines := strings.Split(want, "\n"), strings.Split(got, "\n")
+	if len(gotLines) != len(wantLines) {
+		t.Errorf("got %d lines, want %d lines", len(gotLines), len(wantLines))
+	}
+	for i := range wantLines {
+		if gotLines[i] != wantLines[i] {
+			t.Errorf("line %d:\n got: %s\nwant: %s", i, gotLines[i], wantLines[i])
+		}
+	}
+}
+
+func parseAndGenerate(t *testing.T, s *tokenizer.Scanner) string {
+	t.Helper()
+
+	p := New()
+	c := p.NewContext()
+	for s.Scan() {
+		if err := p.Parse(c, s.Token()); err != nil {
+			t.Errorf("failed to parse: %v", err)
+		}
+	}
+	if err := s.Err(); err != nil {
+		t.Errorf("failed to tokenize: %v", err)
+	}
+
+	out := strings.Builder{}
+	if err := generator.New(&out).Generate(c.Document()); err != nil {
+		t.Errorf("failed to generate: %v", err)
+	}
+	return out.String()
+}
+
 var reSciNotFixup = regexp.MustCompile("([0-9.]+)[eE]([+-])")
 
 func TestKDLOrgTestCases(t *testing.T) {
