@@ -1211,7 +1211,8 @@ func TestUnmarshalMapTimes(t *testing.T) {
 	}
 }
 
-// TestUnmarshalSuite should be run with `-tags kdldeterministic` to avoid false failures due to nondeterministic map order
+// TestUnmarshalSuite relies on deterministic map key and property ordering, which is always enabled (see
+// internal/marshaler/marshal_sort_keys.go and document/properties.go).
 func TestUnmarshalSuite(t *testing.T) {
 	var (
 		intf                   interface{}

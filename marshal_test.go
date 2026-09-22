@@ -215,8 +215,8 @@ father "\"Bob\""
 mother "\"Jane\""
 `
 
-	kdlOutputMarshalKDLNode = "father \"BOB\" \"JOHNSON\" active=true age=32\n" +
-		"mother \"JANE\" \"JOHNSON\" active=true age=28\n"
+	kdlOutputMarshalKDLNode = "father \"BOB\" \"JOHNSON\" age=32 active=true\n" +
+		"mother \"JANE\" \"JOHNSON\" age=28 active=true\n"
 
 	kdlOutputMarshalTextValue = `
 father firstname="BOB" lastname="JOHNSON"
@@ -276,7 +276,8 @@ var srcIgnoreField = testIgnoreField{
 	Ignored:      "omit me, please",
 }
 
-// TestMarshalSuite should be run with `-tags kdldeterministic` to avoid false failures due to nondeterministic map order
+// TestMarshalSuite relies on deterministic map key and property ordering, which is always enabled (see
+// internal/marshaler/marshal_sort_keys.go and document/properties.go).
 func TestMarshalSuite(t *testing.T) {
 	var (
 		expectSingleArgMapIntf interface{} = expectSingleArgMap
@@ -666,4 +667,47 @@ schmeckles {
 		t.Errorf("\nwant: %#v\n got: %#v", want, got)
 	}
 
+}
+
+// TestMarshalPropertyOrderIsStable asserts that node properties are always emitted in the order they were added
+// (insertion order), and that this order is stable across repeated marshaling of the same document. Before
+// properties.go stopped needing the `kdldeterministic` build tag, the default Properties implementation was a plain
+// Go map whose String() method re-sorted keys alphabetically on every call; that happened to be repeatable, but it
+// silently discarded the order in which properties were written or added, which is what downstream consumers who
+// diff generated KDL files actually care about. This test fails if property order is not preserved.
+func TestMarshalPropertyOrderIsStable(t *testing.T) {
+	type props struct {
+		Zebra string `kdl:",prop"`
+		Apple string `kdl:",prop"`
+		Mango string `kdl:",prop"`
+	}
+	type doc struct {
+		Node props `kdl:"node"`
+	}
+
+	d := doc{Node: props{Zebra: "z", Apple: "a", Mango: "m"}}
+
+	const want = `
+node zebra="z" apple="a" mango="m"
+`
+
+	var first string
+	for i := 0; i < 50; i++ {
+		var b strings.Builder
+		e := NewEncoder(&b)
+		if err := e.Encode(d); err != nil {
+			t.Fatal(err)
+		}
+		got := b.String()
+		if i == 0 {
+			first = got
+			if strings.TrimSpace(got) != strings.TrimSpace(want) {
+				t.Fatalf("unexpected property order:\nwant: %q\n got: %q", want, got)
+			}
+			continue
+		}
+		if got != first {
+			t.Fatalf("property order changed between iterations (iteration %d):\nfirst: %q\n got: %q", i, first, got)
+		}
+	}
 }
