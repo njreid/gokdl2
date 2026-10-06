@@ -307,11 +307,19 @@ func (s *Scanner) popMark() {
 }
 
 // copyFromMark returns a slice of bytes starting from the most recently marked position and ending at the current
-// input buffer position
+// input buffer position.
+//
+// If input is being streamed from an io.Reader and more data needs to be read from the reader, a copy of the bytes is
+// returned.
+// If input is not being streamed from a reader, or no further data needs to be read from the reader, a subslice of the
+// input buffer to avoid unnecessary memory allocations.
 func (s *Scanner) copyFromMark() []byte {
 	p := s.marks[len(s.marks)-1]
 	newPos := len(s.raw) - len(s.input)
 	r := s.raw[p:newPos]
+	if s.r != nil {
+		r = append(make([]byte, 0, len(r)), r...)
+	}
 	return r
 }
 
