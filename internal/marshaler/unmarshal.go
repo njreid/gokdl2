@@ -1013,13 +1013,10 @@ func setMapKeyValueFromFunc(c *unmarshalContext, destMap reflect.Value, mapKeyTy
 	}
 
 	// set the value (creating if necessary)
-	val := destMap.MapIndex(key)
-	if !val.IsValid() {
-		val = reflect.New(mapValType)
-		if mapValType.Kind() == reflect.Ptr {
-			val = reflect.New(val.Type().Elem())
-		}
-		val = val.Elem()
+	existing := destMap.MapIndex(key)
+	val := reflect.New(mapValType).Elem()
+	if existing.IsValid() {
+		val.Set(existing)
 	}
 
 	if err := f(&val); err != nil {
