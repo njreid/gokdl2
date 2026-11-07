@@ -100,7 +100,7 @@ func isBareIdentifierCharVersion(c rune, r relaxed.Flags, first bool, v Version)
 
 	if v == VersionV2 {
 		switch c {
-		case '(', ')', '{', '}', '[', ']', '/', '\\', '"', '#', ';', '=':
+		case '(', ')', '{', '}', '[', ']', '/', '\\', '"', '#', ';', '=', '\uFEFF':
 			return false
 		}
 		if first && isDigit(c) {
@@ -135,6 +135,24 @@ func IsBareIdentifier(s string, rf relaxed.Flags) bool {
 func IsBareIdentifierVersion(s string, rf relaxed.Flags, v Version) bool {
 	if len(s) == 0 {
 		return false
+	}
+
+	if v == VersionV2 {
+		switch s {
+		case "true", "false", "null", "inf", "-inf", "nan":
+			return false
+		}
+		// A digit after an optional sign and an optional dot would be read as a number.
+		rest := s
+		if isSign(rune(rest[0])) {
+			rest = rest[1:]
+		}
+		if len(rest) > 0 && rest[0] == '.' {
+			rest = rest[1:]
+		}
+		if len(rest) > 0 && isDigit(rune(rest[0])) {
+			return false
+		}
 	}
 
 	first := true
