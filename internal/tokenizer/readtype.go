@@ -313,6 +313,11 @@ func (s *Scanner) readBareIdentifier() (TokenID, []byte, error) {
 		if isDigit(c) {
 			return Unknown, nil, fmt.Errorf("unexpected character %c", c)
 		}
+		if s.Version == VersionV2 && c == '.' {
+			if _, _, c3, err := s.peekThree(); err == nil && isDigit(c3) {
+				return Unknown, nil, fmt.Errorf("unexpected character %c", c3)
+			}
+		}
 	default:
 		if !isBareIdentifierStartCharVersion(c, s.RelaxedNonCompliant, s.Version) {
 			return Unknown, nil, fmt.Errorf("unexpected character %c", c)
