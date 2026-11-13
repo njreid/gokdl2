@@ -647,6 +647,12 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			return nil
 		},
 		tokenizer.ClassValue: func(c *ParseContext, t tokenizer.Token) error {
+			// KDL v1 values are strings, numbers, booleans and null; a bare identifier is only a value in v2 or in
+			// relaxed NGINX mode
+			if t.ID == tokenizer.BareIdentifier && c.opts.Version != tokenizer.VersionV2 &&
+				!c.opts.RelaxedNonCompliant.Permit(relaxed.NGINXSyntax) {
+				return unexpectedToken(c, t)
+			}
 			if c.ignoreNextArgProp {
 				c.ignoreNextArgProp = false
 			} else if _, err := c.addPropertyToken(c.currentNode(), c.ident, t, c.typeAnnot); err != nil {
