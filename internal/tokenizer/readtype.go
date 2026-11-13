@@ -224,6 +224,10 @@ func (s *Scanner) readQuotedStringQ(q rune) ([]byte, error) {
 		return nil, fmt.Errorf("unexpected character %c", c)
 	}
 
+	if s.canFastScan() {
+		return s.readQuotedStringFast(byte(q))
+	}
+
 	escaped := false
 	foldingWhitespace := false
 	done := false
@@ -334,11 +338,7 @@ func (s *Scanner) readBareIdentifier() (TokenID, []byte, error) {
 
 	var literal []byte
 
-	isBareIdentifierCharClosure := func(c rune) bool {
-		return isBareIdentifierCharVersion(c, s.RelaxedNonCompliant, false, s.Version)
-	}
-
-	if literal, err = s.readWhile(isBareIdentifierCharClosure, 1); err != nil {
+	if literal, err = s.readBareIdentifierChars(); err != nil {
 		return Unknown, nil, err
 	}
 	tokenType := BareIdentifier

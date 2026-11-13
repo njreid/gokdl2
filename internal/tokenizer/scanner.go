@@ -44,6 +44,11 @@ type Scanner struct {
 	versionMarkerDetected bool
 	r                     io.Reader
 	lastErr               error
+
+	// identTable caches which ASCII bytes continue a bare identifier for the version and flags in identTableKey
+	identTable    [256]bool
+	identTableKey identTableKey
+	identTableSet bool
 }
 
 func (s *Scanner) Read(p []byte) (n int, err error) {
@@ -331,8 +336,12 @@ func (s *Scanner) copyFromMark() []byte {
 func (s *Scanner) readWhile(validRune func(c rune) bool, minLength int) ([]byte, error) {
 	s.pushMark()
 	defer s.popMark()
+	return s.readWhileMarked(validRune, minLength, false)
+}
 
-	valid := false
+// readWhileMarked is readWhile for a caller that has already pushed a mark; valid reports whether the caller has
+// already consumed at least one valid rune after the mark.
+func (s *Scanner) readWhileMarked(validRune func(c rune) bool, minLength int, valid bool) ([]byte, error) {
 	for {
 		c, err := s.peek()
 		if err != nil && err != io.EOF {
@@ -516,6 +525,14 @@ func (s *Scanner) readNext() (Token, error) {
 		Line:    s.line,
 		Column:  s.column,
 		Version: s.Version,
+	}
+
+	if s.canFastScan() && len(s.input) > 0 && (s.input[0] == ' ' || s.input[0] == '\t') {
+		if data, ok := s.readWhitespaceFast(); ok {
+			token.ID = Whitespace
+			token.Data = data
+			return token, nil
+		}
 	}
 
 	c, size, err := s.peekSize()
