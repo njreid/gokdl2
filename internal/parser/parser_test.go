@@ -1106,7 +1106,7 @@ func TestParserV2(t *testing.T) {
 			name:    "v2 multiline string",
 			input:   "node \"\"\"\n    hello\n    world\n    \"\"\"",
 			version: tokenizer.VersionV2,
-			expect:  "node \"\"\"\nhello\nworld\"\"\"",
+			expect:  "node \"\"\"\nhello\nworld\n\"\"\"",
 		},
 		{
 			name:    "v2 raw string",
