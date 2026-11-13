@@ -346,7 +346,10 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			return nil
 		},
 		tokenizer.ParensOpen: func(c *ParseContext, t tokenizer.Token) error {
-			// a ( inside a node declaration is hte beginning of a type annotation for a node
+			// a ( inside a node declaration is the beginning of a type annotation for a value; only one is allowed
+			if c.typeAnnot.Valid() {
+				return unexpectedToken(c, t)
+			}
 			c.pushState(stateTypeAnnot)
 			return nil
 		},
@@ -455,6 +458,23 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 		},
 	},
 	stateArgProp: {
+		tokenizer.ParensOpen: func(c *ParseContext, t tokenizer.Token) error {
+			// in v2, whitespace after a value doesn't end the arg/prop decision (a '=' may follow); a '(' starts the
+			// type annotation of the next value, so the pending value was an argument
+			if !c.ident.Valid() {
+				return unexpectedToken(c, t)
+			}
+			if c.ignoreNextArgProp {
+				c.ignoreNextArgProp = false
+			} else if err := c.addArgumentToken(c.currentNode(), c.ident, c.typeAnnot); err != nil {
+				return err
+			}
+			c.typeAnnot.Clear()
+			c.ident.Clear()
+			c.state = stateNodeParams
+			c.pushState(stateTypeAnnot)
+			return nil
+		},
 		tokenizer.TokenComment: func(c *ParseContext, t tokenizer.Token) error {
 			if c.ignoreNextArgProp {
 				c.ignoreNextArgProp = false

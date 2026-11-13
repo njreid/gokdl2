@@ -35,7 +35,8 @@ func requiresV2Separation(prev, curr tokenizer.Token) bool {
 		switch curr.ID {
 		case tokenizer.BareIdentifier, tokenizer.RawString, tokenizer.QuotedString,
 			tokenizer.Decimal, tokenizer.Hexadecimal, tokenizer.Octal, tokenizer.Binary,
-			tokenizer.SuffixedDecimal, tokenizer.Boolean, tokenizer.Null, tokenizer.Keyword:
+			tokenizer.SuffixedDecimal, tokenizer.Boolean, tokenizer.Null, tokenizer.Keyword,
+			tokenizer.ParensOpen:
 			return true
 		}
 	}
