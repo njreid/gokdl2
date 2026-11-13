@@ -167,18 +167,7 @@ func (p *Parser) parse(c *ParseContext, token tokenizer.Token) error {
 		c.justContinuedLine = false
 	}
 
-	validTransitions := stateTransitions[c.state]
-
-	handler, ok := validTransitions[token.ID]
-	if !ok {
-		// if there's no handler for this token's specific ID, check for a handler for the class of token instead
-		tokenClasses := token.ID.Classes()
-		for _, tokenClass := range tokenClasses {
-			if handler, ok = validTransitions[tokenClass]; ok {
-				break
-			}
-		}
-	}
+	handler := lookupTransition(c.state, token.ID)
 
 	var err error
 	if handler == nil {

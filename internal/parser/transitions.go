@@ -13,7 +13,7 @@ type stateTransitionFunc func(*ParseContext, tokenizer.Token) error
 // stateTransitions maps a given parser state to the tokens allowed in that state, and provides a transition function
 // that accepts a token and a context, processes the token, and updates the parser state
 //
-// TODO: benchmark this; it's likely faster (though likely much less readable) to do this using switch statements
+// This map is the readable source of truth; init flattens it into dispatch for the hot path.
 var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc{
 	stateDocument: {
 		tokenizer.Whitespace: func(c *ParseContext, t tokenizer.Token) error {
@@ -652,4 +652,35 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			return unexpectedToken(c, t)
 		},
 	},
+}
+
+// dispatch is stateTransitions flattened into a dense table indexed by [state][token ID], with token classes
+// pre-resolved into each concrete token ID. A nil entry means the token is unexpected in that state.
+var dispatch [numStates][tokenizer.NumTokenIDs]stateTransitionFunc
+
+func init() {
+	for state, handlers := range stateTransitions {
+		for id := 0; id < tokenizer.NumTokenIDs; id++ {
+			tid := tokenizer.TokenID(id)
+			// an exact ID handler wins; otherwise the first class (in Classes order) that has a handler
+			if h, ok := handlers[tid]; ok {
+				dispatch[state][id] = h
+				continue
+			}
+			for _, class := range tid.Classes() {
+				if h, ok := handlers[class]; ok {
+					dispatch[state][id] = h
+					break
+				}
+			}
+		}
+	}
+}
+
+// lookupTransition returns the handler for a token ID in a state, or nil if out of range or unhandled.
+func lookupTransition(state parserState, id tokenizer.TokenID) stateTransitionFunc {
+	if uint(state) >= uint(numStates) || uint(id) >= uint(tokenizer.NumTokenIDs) {
+		return nil
+	}
+	return dispatch[state][id]
 }

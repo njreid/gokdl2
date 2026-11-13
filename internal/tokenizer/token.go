@@ -55,7 +55,10 @@ const (
 	ClassComment
 )
 
-var tokenClasses = map[TokenID][]TokenID{
+// NumTokenIDs is one more than the highest TokenID value, for sizing tables indexed by TokenID.
+const NumTokenIDs = int(ClassComment) + 1
+
+var tokenClasses = [NumTokenIDs][]TokenID{
 	Newline:           {ClassTerminator, ClassWhitespace, ClassEndOfLine},
 	Whitespace:        {ClassWhitespace},
 	MultiLineComment:  {ClassComment},
@@ -85,6 +88,9 @@ var tokenClasses = map[TokenID][]TokenID{
 }
 
 func (t TokenID) Classes() []TokenID {
+	if uint(t) >= uint(NumTokenIDs) {
+		return nil
+	}
 	return tokenClasses[t]
 }
 
