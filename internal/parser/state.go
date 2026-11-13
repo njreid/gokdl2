@@ -17,6 +17,8 @@ const (
 	stateChildren
 	stateTypeAnnot
 	stateTypeDone
+
+	numStates // sentinel: number of parser states; keep last
 )
 
 func (p parserState) String() string {
