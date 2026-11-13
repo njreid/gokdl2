@@ -47,7 +47,12 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 				}
 			}
 			if c.typeAnnot.Valid() {
-				node.Type = document.TypeAnnotation(c.typeAnnot.Data)
+				ta, err := document.TypeAnnotationFromToken(c.typeAnnot)
+				if err != nil {
+					return err
+				}
+				node.Type = ta
+				node.EmptyType = ta == ""
 				c.typeAnnot.Clear()
 			}
 			c.pushState(stateNode)
@@ -153,7 +158,12 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 				}
 			}
 			if c.typeAnnot.Valid() {
-				node.Type = document.TypeAnnotation(c.typeAnnot.Data)
+				ta, err := document.TypeAnnotationFromToken(c.typeAnnot)
+				if err != nil {
+					return err
+				}
+				node.Type = ta
+				node.EmptyType = ta == ""
 				c.typeAnnot.Clear()
 			}
 			c.pushState(stateNode)
@@ -440,11 +450,8 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			return nil
 		},
 		tokenizer.BraceClose: func(c *ParseContext, t tokenizer.Token) error {
-			_, _, err := c.popNodeAndState()
-			if err != nil {
-				return err
-			}
-			return ErrReenterState
+			// a property name without '=' and a value is incomplete
+			return unexpectedToken(c, t)
 		},
 	},
 	stateArgProp: {
@@ -621,11 +628,8 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			return nil
 		},
 		tokenizer.BraceClose: func(c *ParseContext, t tokenizer.Token) error {
-			_, _, err := c.popNodeAndState()
-			if err != nil {
-				return err
-			}
-			return ErrReenterState
+			// a property name with '=' but no value is incomplete
+			return unexpectedToken(c, t)
 		},
 	},
 }
