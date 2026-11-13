@@ -389,27 +389,10 @@ func rawString(s string) string {
 }
 
 // AppendRawString appends s, quoted for use as a KDL v1 RawString (r#"..."#), to b and returns the expanded buffer.
-// If hashCount is -1, the minimum number of hashes required to quote s will be used.
-//
-// Note that the hash count chosen for -1 is one too low when s contains a quote (or `"#`...): Value rendering
-// therefore computes the hash count itself with rawHashCount.
+// If hashCount is -1, the minimum number of hashes required to quote s will be used. If hashCount is too small for s
+// to be quoted, it is increased.
 func AppendRawString(b []byte, s string, hashCount int) []byte {
-	if hashCount < 0 {
-		hashes := append(make([]byte, 0, 64), '#')
-		ok := false
-		for i := 0; i < cap(hashes); i++ {
-			terminator := `"` + string(hashes)
-			if !strings.Contains(s, terminator) {
-				ok = true
-				break
-			}
-			hashes = append(hashes, '#')
-		}
-		if !ok {
-			return append(b, "r\"invalid\""...)
-		}
-		hashCount = len(hashes) - 1
-	}
+	hashCount = rawHashCount(s, `"`, hashCount, 0)
 
 	minSpace := 1 + hashCount + 1 + len(s) + 1 + hashCount
 	if cap(b)-len(b) < minSpace {
@@ -504,7 +487,8 @@ func unquoteMultiLineToken(s string, delim string, quote byte, allowRaw bool) (s
 	}
 	inner = inner[openingLineEnd+openingNewlineLen:]
 
-	content, indent, closingEscaped, err := parseMultilineTail(inner)
+	// raw strings have no escapes, so a trailing backslash line is content, not an escaped closing line
+	content, indent, closingEscaped, err := parseMultilineTail(inner, hashCount == 0)
 	if err != nil {
 		return "", 0, err
 	}
@@ -540,10 +524,16 @@ func parseMultilineClosingEscape(s string) (int, bool) {
 	return 0, false
 }
 
-func parseMultilineTail(inner string) (content string, indent string, closingEscaped bool, err error) {
+func parseMultilineTail(inner string, allowEscape bool) (content string, indent string, closingEscaped bool, err error) {
+	closingEscape := func(line string) (int, bool) {
+		if !allowEscape {
+			return 0, false
+		}
+		return parseMultilineClosingEscape(line)
+	}
 	closingLineStart, closingNewlineLen := lastNewline(inner)
 	if closingLineStart == -1 {
-		if idx, ok := parseMultilineClosingEscape(inner); ok {
+		if idx, ok := closingEscape(inner); ok {
 			return "", inner[:idx], true, nil
 		}
 		return "", inner, false, nil
@@ -551,7 +541,7 @@ func parseMultilineTail(inner string) (content string, indent string, closingEsc
 
 	closingLine := inner[closingLineStart+closingNewlineLen:]
 	prefix := inner[:closingLineStart]
-	if idx, ok := parseMultilineClosingEscape(closingLine); ok {
+	if idx, ok := closingEscape(closingLine); ok {
 		return prefix, closingLine[:idx], true, nil
 	}
 	if !isInlineWhitespaceOnly(closingLine) {
@@ -565,7 +555,7 @@ func parseMultilineTail(inner string) (content string, indent string, closingEsc
 		prevLine = prefix[prevLineStart+prevNewlineLen:]
 		prevPrefix = prefix[:prevLineStart]
 	}
-	if idx, ok := parseMultilineClosingEscape(prevLine); ok {
+	if idx, ok := closingEscape(prevLine); ok {
 		return prevPrefix, prevLine[:idx], true, nil
 	}
 	return prefix, closingLine, false, nil
@@ -902,8 +892,6 @@ func canRawString(s string) bool {
 //     and PS are not accepted as part of the string body.
 //   - no line may be non-empty and made up only of whitespace: such lines are normalised to empty lines. This
 //     includes a final line that is only whitespace.
-//   - the last line must not be only a backslash surrounded by optional whitespace, which the parser reads as an
-//     escaped closing line (even in raw strings).
 //
 // Hashes never prevent raw representation, since the number of hashes is chosen so that s contains no `"""`
 // followed by that many hashes. A leading or trailing LF, and the empty string, are representable.
@@ -916,14 +904,12 @@ func canRawMultiLine(s string) bool {
 			return false
 		}
 	}
-	last := ""
 	for _, line := range strings.Split(s, "\n") {
 		if line != "" && strings.TrimSpace(line) == "" {
 			return false
 		}
-		last = line
 	}
-	return strings.TrimSpace(last) != "\\"
+	return true
 }
 
 // canLiteralString reports whether every character of s can appear literally in a KDL v2 string or identifier.

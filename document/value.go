@@ -235,8 +235,7 @@ func (v *Value) value(b []byte, opts valueOpts) []byte {
 				if haveOpt(voVersionV2) {
 					b = AppendRawStringV2(b, x, hashes)
 				} else {
-					// AppendRawString's own choice of hashes is too low when x contains a quote
-					b = AppendRawString(b, x, rawHashCount(x, `"`, max(hashes, 0), 0))
+					b = AppendRawString(b, x, hashes)
 				}
 			} else if v.Flag.Has(FlagQuoted) || v.Flag.Has(FlagRaw) || v.Flag.Has(FlagMultiLine) {
 				b = AppendQuotedString(b, x, '"')
