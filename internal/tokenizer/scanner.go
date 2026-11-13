@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"strings"
-	"sync"
 	"unicode/utf8"
 
 	"github.com/njreid/gokdl2/relaxed"
@@ -389,28 +388,17 @@ func (s *Scanner) SizeEstimate() int {
 	return len(s.raw)
 }
 
-type staticScanner struct {
-	s  Scanner
-	mu sync.Mutex
-}
-
-var staticScan = staticScanner{
-	s: Scanner{
-		peeked: make([]peeked, 0, 4),
-		marks:  make([]int, 0, 8),
-	},
-}
-
+// ScanOne scans the first token from b using a fresh scanner.
 func ScanOne(b []byte) (Token, error) {
-	staticScan.mu.Lock()
-	defer staticScan.mu.Unlock()
+	tok, _, err := ScanOneN(b)
+	return tok, err
+}
 
-	staticScan.s.raw = b
-	staticScan.s.input = b
-	staticScan.s.len = len(b)
-	staticScan.s.peeked = staticScan.s.peeked[:0]
-	staticScan.s.marks = staticScan.s.marks[:0]
-	return staticScan.s.readNext()
+// ScanOneN is like ScanOne but also reports how many bytes of b the token consumed.
+func ScanOneN(b []byte) (Token, int, error) {
+	s := NewSlice(b)
+	tok, err := s.readNext()
+	return tok, s.Offset(), err
 }
 
 // detectVersion peeks at the start of the input for a /- kdl-version N marker and updates s.Version.
