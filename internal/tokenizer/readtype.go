@@ -1,6 +1,7 @@
 package tokenizer
 
 import (
+	"errors"
 	"fmt"
 	"io"
 
@@ -227,7 +228,8 @@ func (s *Scanner) readQuotedStringQ(q rune) ([]byte, error) {
 	foldingWhitespace := false
 	done := false
 	first := true
-	return s.readWhile(func(c rune) bool {
+	var closureErr error
+	data, err := s.readWhile(func(c rune) bool {
 		if first {
 			// skip "
 			first = false
@@ -245,9 +247,9 @@ func (s *Scanner) readQuotedStringQ(q rune) ([]byte, error) {
 		switch c {
 		case '\\':
 			if s.Version == VersionV2 {
-				next, err := s.peekAt(1)
-				if err == nil && next == '/' {
-					err = fmt.Errorf("unexpected character %c", next)
+				next, perr := s.peekAt(1)
+				if perr == nil && next == '/' {
+					closureErr = fmt.Errorf("unexpected character %c", next)
 					return false
 				}
 			}
@@ -268,7 +270,7 @@ func (s *Scanner) readQuotedStringQ(q rune) ([]byte, error) {
 				break
 			}
 			if !escaped {
-				err = fmt.Errorf("unexpected character %c", c)
+				closureErr = fmt.Errorf("unexpected newline in string")
 				return false
 			}
 			escaped = false
@@ -280,8 +282,19 @@ func (s *Scanner) readQuotedStringQ(q rune) ([]byte, error) {
 		}
 		return true
 	}, 2)
-
+	if closureErr != nil {
+		return nil, closureErr
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !done {
+		return nil, errUnterminatedString
+	}
+	return data, nil
 }
+
+var errUnterminatedString = errors.New("unterminated string")
 
 // readBareIdentifier reads a bare identifier from the current position and returns a TokenID representing its type
 // (either BareIdentifier, Boolean, or Null), the byte sequence for the identifier, and a non-nil error on failure
