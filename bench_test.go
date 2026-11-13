@@ -46,14 +46,18 @@ func benchParse(b *testing.B, data []byte, opts ParseOptions, stream bool) {
 	}
 }
 
-func BenchmarkParseV2Auto(b *testing.B) { benchParse(b, benchDoc(true, 3000), DefaultParseOptions, false) }
+func BenchmarkParseV2Auto(b *testing.B) {
+	benchParse(b, benchDoc(true, 3000), DefaultParseOptions, false)
+}
 func BenchmarkParseV2(b *testing.B) {
 	benchParse(b, benchDoc(true, 3000), ParseOptions{Version: ParseVersionV2}, false)
 }
 func BenchmarkParseV2Stream(b *testing.B) {
 	benchParse(b, benchDoc(true, 3000), ParseOptions{Version: ParseVersionV2}, true)
 }
-func BenchmarkParseV1Auto(b *testing.B) { benchParse(b, benchDoc(false, 3000), DefaultParseOptions, false) }
+func BenchmarkParseV1Auto(b *testing.B) {
+	benchParse(b, benchDoc(false, 3000), DefaultParseOptions, false)
+}
 func BenchmarkParseV2Small(b *testing.B) {
 	benchParse(b, benchDoc(true, 2), DefaultParseOptions, false)
 }
