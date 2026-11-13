@@ -205,7 +205,8 @@ func (v *Value) value(b []byte, opts valueOpts) []byte {
 		if haveOpt(voVersionV2) {
 			version = tokenizer.VersionV2
 		}
-		isBare := tokenizer.IsBareIdentifierVersion(x, 0, version)
+		// the tokenizer accepts some strings as identifiers that contain characters that may not appear literally
+		isBare := tokenizer.IsBareIdentifierVersion(x, 0, version) && (version != tokenizer.VersionV2 || canLiteralString(x))
 
 		if b == nil {
 			size := len(x)
@@ -223,19 +224,21 @@ func (v *Value) value(b []byte, opts valueOpts) []byte {
 				hashes = -1
 			}
 
-			if v.Flag.Has(FlagMultiLine) && haveOpt(voStrictStringFlags) {
-				if v.Flag.Has(FlagRaw) && haveOpt(voVersionV2) {
+			if v.Flag.Has(FlagMultiLine) && haveOpt(voStrictStringFlags) && haveOpt(voVersionV2) {
+				// a raw multi-line string cannot represent every value, so fall back to an escaped multi-line string
+				if v.Flag.Has(FlagRaw) && canRawMultiLine(x) {
 					b = AppendMultiLineStringV2(b, x, hashes)
 				} else {
 					b = AppendMultiLineString(b, x)
 				}
-			} else if v.Flag.Has(FlagRaw) && haveOpt(voStrictStringFlags) {
+			} else if v.Flag.Has(FlagRaw) && haveOpt(voStrictStringFlags) && (!haveOpt(voVersionV2) || canRawString(x)) {
 				if haveOpt(voVersionV2) {
 					b = AppendRawStringV2(b, x, hashes)
 				} else {
-					b = AppendRawString(b, x, hashes)
+					// AppendRawString's own choice of hashes is too low when x contains a quote
+					b = AppendRawString(b, x, rawHashCount(x, `"`, max(hashes, 0), 0))
 				}
-			} else if v.Flag.Has(FlagQuoted) || (v.Flag.Has(FlagRaw) && !haveOpt(voStrictStringFlags)) || (v.Flag.Has(FlagMultiLine) && !haveOpt(voStrictStringFlags)) {
+			} else if v.Flag.Has(FlagQuoted) || v.Flag.Has(FlagRaw) || v.Flag.Has(FlagMultiLine) {
 				b = AppendQuotedString(b, x, '"')
 			} else if isBare && !haveOpt(voNoBare) {
 				b = append(b, x...)

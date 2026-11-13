@@ -144,7 +144,7 @@ func (s *Scanner) readQuotedStringFast(q byte) ([]byte, error) {
 			folding = false
 			switch c {
 			case '\\':
-				if v2 && i+size < len(in) && in[i+size] == '/' {
+				if v2 && !escaped && i+size < len(in) && in[i+size] == '/' {
 					err = fmt.Errorf("unexpected character %c", '/')
 				}
 				escaped = !escaped
