@@ -55,6 +55,9 @@ func (s *Scanner) Read(p []byte) (n int, err error) {
 		s.refill()
 	}
 	if len(s.input) == 0 {
+		if s.err != nil {
+			return 0, s.err
+		}
 		return 0, io.EOF
 	}
 	n = copy(p, s.input)
@@ -508,6 +511,14 @@ func (s *Scanner) detectVersion() {
 	}
 }
 
+// DetectVersion reports the KDL version declared by a leading "/- kdl-version N" marker in input, or VersionAuto if
+// there is no marker.
+func DetectVersion(input []byte) Version {
+	s := NewSlice(input)
+	s.detectVersion()
+	return s.Version
+}
+
 // readNext reads and returns the next token from the input buffer, or a non-nil error on failure
 func (s *Scanner) readNext() (Token, error) {
 	if s.Version == VersionAuto && !s.versionMarkerDetected {
@@ -939,8 +950,12 @@ func NewBuffer(r io.Reader, b []byte) *Scanner {
 
 	nr, err := io.ReadFull(r, b)
 	if err != nil {
-		if err != io.ErrUnexpectedEOF {
+		if err != io.ErrUnexpectedEOF && err != io.EOF {
+			// retain what was read so far; the error is surfaced by Err/Read
 			s.err = err
+			s.input = b[0:nr]
+			s.raw = s.input
+			s.len = nr
 			return s
 		}
 		// nothing more to read; don't retain the reader
