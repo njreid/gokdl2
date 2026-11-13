@@ -551,7 +551,17 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			if c.opts.Version == tokenizer.VersionV2 {
 				return nil
 			}
-			return unexpectedToken(c, t)
+			// in v1 a comment directly after a value ends the argument, as whitespace does; the comment itself is then
+			// handled by stateNodeParams (a single-line comment also ends the node there)
+			if c.ignoreNextArgProp {
+				c.ignoreNextArgProp = false
+			} else if err := c.addArgumentToken(c.currentNode(), c.ident, c.typeAnnot); err != nil {
+				return err
+			}
+			c.typeAnnot.Clear()
+			c.ident.Clear()
+			c.state = stateNodeParams
+			return ErrReenterState
 		},
 
 		tokenizer.Continuation: func(c *ParseContext, t tokenizer.Token) error {

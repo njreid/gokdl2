@@ -181,28 +181,21 @@ var upstreamCases = []upstreamCase{
 	// Radix integers directly followed by a node terminator or comment. Derived from
 	// kdl-rs src/node.rs test::parsing (`0xDEADbeef;`) and the radix tests above.
 	{name: "hex before semicolon", source: rsSrc("src/node.rs: test::parsing (0xDEADbeef;)"),
-		input: "n 0xDEADbeef;", valid: true, want: "n i:3735928559",
-		knownFailure: "(a) real bug: tokenizer rejects ';' directly after a hex/octal/binary integer ('unexpected character ;')"},
+		input: "n 0xDEADbeef;", valid: true, want: "n i:3735928559"},
 	{name: "octal before semicolon", source: rsSrc("src/node.rs: test::parsing (0xDEADbeef;, octal variant)"),
-		input: "n 0o7;", valid: true, want: "n i:7",
-		knownFailure: "(a) real bug: tokenizer rejects ';' directly after a hex/octal/binary integer"},
+		input: "n 0o7;", valid: true, want: "n i:7"},
 	{name: "binary before semicolon", source: rsSrc("src/node.rs: test::parsing (0xDEADbeef;, binary variant)"),
-		input: "n 0b1;", valid: true, want: "n i:1",
-		knownFailure: "(a) real bug: tokenizer rejects ';' directly after a hex/octal/binary integer"},
+		input: "n 0b1;", valid: true, want: "n i:1"},
 	{name: "hex prop before semicolon", source: rsSrc("src/node.rs: test::parsing (0xDEADbeef;, property variant)"),
-		input: "n k=0xff;", valid: true, want: "n k=i:255",
-		knownFailure: "(a) real bug: tokenizer rejects ';' directly after a hex/octal/binary integer"},
+		input: "n k=0xff;", valid: true, want: "n k=i:255"},
 	{name: "hex before closing brace", source: rsSrc("src/node.rs: test::parsing (0xDEADbeef;, child-block variant)"),
-		input: "n {x 0xff}", valid: true, want: "n {x i:255}",
-		knownFailure: "(a) real bug: tokenizer rejects '}' directly after a hex/octal/binary integer"},
+		input: "n {x 0xff}", valid: true, want: "n {x i:255}"},
 	{name: "hex before block comment", source: rsSrc("src/node.rs: test::parsing (0xDEADbeef;, comment variant)"),
-		input: "n 0xff/* c */", valid: true, want: "n i:255",
-		knownFailure: "(a) real bug: tokenizer rejects '/' directly after a hex/octal/binary integer"},
+		input: "n 0xff/* c */", valid: true, want: "n i:255"},
 	{name: "hex before newline", source: rsSrc("src/node.rs: test::parsing (0xDEADbeef;, newline variant)"),
 		input: "n 0xDEADbeef\n", valid: true, want: "n i:3735928559"},
 	{name: "v1 hex before semicolon", source: rsSrc("src/v1_parser.rs: value_tests::hexadecimal_val (terminator variant)"),
-		input: "n 0xff;", v1: true, valid: true, want: "n i:255",
-		knownFailure: "(a) real bug: v1 tokenizer rejects ';' directly after a hex/octal/binary integer"},
+		input: "n 0xff;", v1: true, valid: true, want: "n i:255"},
 
 	// ---- kdl-rs src/v2_parser.rs: failure_tests (inputs and error locations) ----
 	// errAt is derived from the byte span start of the first kdl-rs diagnostic.
@@ -263,8 +256,7 @@ var upstreamCases = []upstreamCase{
 
 	// ---- kdl-rs src/node.rs ----
 	{name: "node type and quoted name", source: rsSrc("src/node.rs: test::parsing"),
-		input: "\n\t  (\"ty\")\"node\" 0xDEADbeef;\n", valid: true, want: "(ty)node i:3735928559",
-		knownFailure: "(a) real bug: same as 'hex before semicolon'"},
+		input: "\n\t  (\"ty\")\"node\" 0xDEADbeef;\n", valid: true, want: "(ty)node i:3735928559"},
 	{name: "node type and quoted name (no semicolon)", source: rsSrc("src/node.rs: test::parsing"),
 		input: "\n\t  (\"ty\")\"node\" 0xDEADbeef\n", valid: true, want: "(ty)node i:3735928559"},
 	{name: "node with children and self value", source: rsSrc("src/node.rs: test::parsing"),

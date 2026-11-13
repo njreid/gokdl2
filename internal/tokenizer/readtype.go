@@ -823,7 +823,7 @@ func (s *Scanner) readDecimal() (TokenID, []byte, error) {
 		}
 	}
 
-	if c, err := s.peek(); err == nil && !isSeparator(c) {
+	if c, err := s.peek(); err == nil && !isNumberTerminator(c, s.RelaxedNonCompliant) {
 		if s.RelaxedNonCompliant.Permit(relaxed.NGINXSyntax) && isBareIdentifierChar(c, s.RelaxedNonCompliant) {
 			// it's not actually a numeric identifier; parse as a bare string
 
@@ -854,7 +854,7 @@ func (s *Scanner) readNumericBase(valid func(c rune) bool, prefixLen int) ([]byt
 		return nil, fmt.Errorf("unexpected character _")
 	}
 	if err == nil {
-		if c, err := s.peek(); err == nil && !isWhiteSpace(c) && !isNewline(c) {
+		if c, err := s.peek(); err == nil && !isNumberTerminator(c, s.RelaxedNonCompliant) {
 			return nil, fmt.Errorf("unexpected character %c", c)
 		}
 	}
