@@ -386,17 +386,6 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			c.ident = t
 			c.state = stateArgProp
 			return nil
-
-			// a numeric value inside a node declaration is always an argument
-			if c.ignoreNextArgProp {
-				c.ignoreNextArgProp = false
-			} else if err := c.addArgumentToken(c.currentNode(), t, c.typeAnnot); err != nil {
-				return err
-			}
-
-			c.typeAnnot.Clear()
-			c.ident.Clear()
-			return nil
 		},
 		tokenizer.BraceOpen: func(c *ParseContext, t tokenizer.Token) error {
 			if c.ignoreNextArgProp || c.ignoreChildren > 0 {

@@ -1028,7 +1028,7 @@ func TestExampleMarshal20(t *testing.T) {
 }
 
 func TestUnmarshalNginx(t *testing.T) {
-	return
+	t.Skip("requires a local nginx sample file")
 
 	// home, _ := os.UserHomeDir()
 	b, err := os.ReadFile("m:/nginx-sample.conf")
