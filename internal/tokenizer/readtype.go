@@ -343,20 +343,29 @@ func (s *Scanner) readBareIdentifier() (TokenID, []byte, error) {
 	}
 	tokenType := BareIdentifier
 
-	sLit := string(literal)
-	if s.Version == VersionV2 {
-		if sLit == "true" || sLit == "false" || sLit == "null" || sLit == "inf" || sLit == "-inf" || sLit == "nan" {
-			return Unknown, nil, fmt.Errorf("bare %q is not valid in KDL v2; use #%s", sLit, sLit)
+	switch string(literal) {
+	case "true", "false":
+		if s.Version == VersionV2 {
+			return Unknown, nil, bareKeywordError(literal)
+		}
+		tokenType = Boolean
+	case "null":
+		if s.Version == VersionV2 {
+			return Unknown, nil, bareKeywordError(literal)
+		}
+		tokenType = Null
+	case "inf", "-inf", "nan":
+		if s.Version == VersionV2 {
+			return Unknown, nil, bareKeywordError(literal)
 		}
 	}
 
-	if sLit == "true" || sLit == "false" {
-		tokenType = Boolean
-	} else if sLit == "null" {
-		tokenType = Null
-	}
-
 	return tokenType, literal, nil
+}
+
+func bareKeywordError(literal []byte) error {
+	sLit := string(literal)
+	return fmt.Errorf("bare %q is not valid in KDL v2; use #%s", sLit, sLit)
 }
 
 // readHashToken reads a KDL v2 token beginning with '#': a keyword (#true, #false, #null, #inf, #-inf, #nan)
@@ -700,7 +709,9 @@ func (s *Scanner) readIdentifier() (TokenID, []byte, error) {
 	}
 
 	_, c2, err := s.peekTwo()
-	s.log("checking if bare identifier start", "c", c, "c2", c2)
+	if s.Logger != nil {
+		s.log("checking if bare identifier start", "c", c, "c2", c2)
+	}
 	if err == nil && !isBareIdentifierStartCharVersion(c, s.RelaxedNonCompliant, s.Version) && !(c == '-' && !isDigit(c2)) {
 		s.log("not a valid bare identifier")
 		return Unknown, nil, fmt.Errorf("unexpected character %c", c)

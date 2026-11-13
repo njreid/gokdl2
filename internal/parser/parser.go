@@ -128,12 +128,12 @@ func (p *Parser) annotatedError(err error, t tokenizer.Token, context []tokenize
 // error on failure
 func (p *Parser) parse(c *ParseContext, token tokenizer.Token) error {
 	if c.opts.Version == tokenizer.VersionV2 {
-		recent := c.recent.Get()
-		if len(recent) >= 2 {
-			prev := recent[len(recent)-2]
-			if requiresV2Separation(prev, token) {
-				return missingSeparatorError(token)
-			}
+		// The current token was just added to the ring buffer, so the previous one sits just before head. Slots that
+		// have never been written have ID Unknown.
+		r := &c.recent
+		prev := &r.tokens[(r.head+recentTokensCount-1)%recentTokensCount]
+		if prev.ID != tokenizer.Unknown && requiresV2Separation(*prev, token) {
+			return missingSeparatorError(token)
 		}
 	}
 	if c.afterIgnoredChildBlock {

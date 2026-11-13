@@ -670,9 +670,13 @@ func (s *Scanner) readNext() (Token, error) {
 		}
 
 	case '?', '+', '-': // sign or v2 identifier start
-		s.log("reading signed value or identifier", "c", c)
+		if s.Logger != nil {
+			s.log("reading signed value or identifier", "c", c)
+		}
 		_, c2, err := s.peekTwo()
-		s.log("peeked c2", "c2", c2, "err", err)
+		if s.Logger != nil {
+			s.log("peeked c2", "c2", c2, "err", err)
+		}
 		if err != nil {
 			if err == io.EOF && c != '?' {
 				if token.ID, token.Data, err = s.readIdentifier(); err != nil {
@@ -702,7 +706,9 @@ func (s *Scanner) readNext() (Token, error) {
 				return token, err
 			}
 		}
-		s.log("got sign/ident token", "token", token)
+		if s.Logger != nil {
+			s.log("got sign/ident token", "token", token)
+		}
 		return token, nil
 
 	case '0':
