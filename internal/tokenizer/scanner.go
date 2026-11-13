@@ -33,6 +33,7 @@ type Scanner struct {
 	len                   int
 	peeked                []peeked
 	line                  int
+	prevCR                bool // the last consumed rune was '\r', so a following '\n' completes the same line break
 	column                int
 	token                 Token
 	err                   error
@@ -212,12 +213,15 @@ func (s *Scanner) get() (rune, error) {
 		}
 	}
 
-	if isNewline(c) {
+	if c == '\n' && s.prevCR {
+		// second half of a CRLF pair: the line break was already counted at the '\r'
+	} else if isNewline(c) {
 		s.line++
 		s.column = 1
 	} else {
 		s.column++
 	}
+	s.prevCR = c == '\r'
 
 	s.input = s.input[size:]
 	s.len -= size
@@ -830,6 +834,11 @@ func (s *Scanner) extractLineAtOffset(offset int) string {
 	if search == len(s.raw) {
 		search--
 	}
+	if search > 0 && s.raw[search] == '\n' && s.raw[search-1] == '\r' {
+		// the '\n' of a CRLF pair belongs to the same line break as the '\r'
+		search--
+		offset--
+	}
 
 	start := search
 	for start > 0 {
@@ -889,6 +898,9 @@ func (s *Scanner) ExtractLineAtPosition(line, column int) string {
 	lineStart := 0
 	for i := 0; i < len(s.raw) && currentLine < line; i++ {
 		if isNewline(rune(s.raw[i])) {
+			if s.raw[i] == '\r' && i+1 < len(s.raw) && s.raw[i+1] == '\n' {
+				i++
+			}
 			currentLine++
 			lineStart = i + 1
 		}
