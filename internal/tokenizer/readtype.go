@@ -1,6 +1,7 @@
 package tokenizer
 
 import (
+	"errors"
 	"fmt"
 	"io"
 
@@ -227,7 +228,8 @@ func (s *Scanner) readQuotedStringQ(q rune) ([]byte, error) {
 	foldingWhitespace := false
 	done := false
 	first := true
-	return s.readWhile(func(c rune) bool {
+	var closureErr error
+	data, err := s.readWhile(func(c rune) bool {
 		if first {
 			// skip "
 			first = false
@@ -245,9 +247,9 @@ func (s *Scanner) readQuotedStringQ(q rune) ([]byte, error) {
 		switch c {
 		case '\\':
 			if s.Version == VersionV2 {
-				next, err := s.peekAt(1)
-				if err == nil && next == '/' {
-					err = fmt.Errorf("unexpected character %c", next)
+				next, perr := s.peekAt(1)
+				if perr == nil && next == '/' {
+					closureErr = fmt.Errorf("unexpected character %c", next)
 					return false
 				}
 			}
@@ -268,7 +270,7 @@ func (s *Scanner) readQuotedStringQ(q rune) ([]byte, error) {
 				break
 			}
 			if !escaped {
-				err = fmt.Errorf("unexpected character %c", c)
+				closureErr = fmt.Errorf("unexpected newline in string")
 				return false
 			}
 			escaped = false
@@ -280,8 +282,19 @@ func (s *Scanner) readQuotedStringQ(q rune) ([]byte, error) {
 		}
 		return true
 	}, 2)
-
+	if closureErr != nil {
+		return nil, closureErr
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !done {
+		return nil, errUnterminatedString
+	}
+	return data, nil
 }
+
+var errUnterminatedString = errors.New("unterminated string")
 
 // readBareIdentifier reads a bare identifier from the current position and returns a TokenID representing its type
 // (either BareIdentifier, Boolean, or Null), the byte sequence for the identifier, and a non-nil error on failure
@@ -823,9 +836,9 @@ func (s *Scanner) readDecimal() (TokenID, []byte, error) {
 // readNumericBase reads and returns a binary, octal, or hexadecimal number from the current position, ensuring that it
 // is at least 3 characters in length (eg: 0xN), followed by whitespace or a newline, and that all characters are valid;
 // returns a non-nil error on failure
-func (s *Scanner) readNumericBase(valid func(c rune) bool) ([]byte, error) {
-	lit, err := s.readWhile(valid, 3)
-	if err == nil && lit[2] == '_' {
+func (s *Scanner) readNumericBase(valid func(c rune) bool, prefixLen int) ([]byte, error) {
+	lit, err := s.readWhile(valid, prefixLen+1)
+	if err == nil && lit[prefixLen] == '_' {
 		// disallow 0x_
 		return nil, fmt.Errorf("unexpected character _")
 	}
@@ -838,40 +851,40 @@ func (s *Scanner) readNumericBase(valid func(c rune) bool) ([]byte, error) {
 }
 
 // readHexadecimal reads and returns a hexadecimal number from the current position, or a non-nil error on failure
-func (s *Scanner) readHexadecimal() ([]byte, error) {
+func (s *Scanner) readHexadecimal(prefixLen int) ([]byte, error) {
 	n := 0
 	return s.readNumericBase(func(c rune) bool {
-		if n < 2 {
-			// skip 0x
+		if n < prefixLen {
+			// skip optional sign and 0x
 			n++
 			return true
 		}
 		return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F') || c == '_'
-	})
+	}, prefixLen)
 }
 
 // readOctal reads and returns an octal number from the current position, or a non-nil error on failure
-func (s *Scanner) readOctal() ([]byte, error) {
+func (s *Scanner) readOctal(prefixLen int) ([]byte, error) {
 	n := 0
 	return s.readNumericBase(func(c rune) bool {
-		if n < 2 {
-			// skip 0o
+		if n < prefixLen {
+			// skip optional sign and 0o
 			n++
 			return true
 		}
 		return (c >= '0' && c <= '7') || c == '_'
-	})
+	}, prefixLen)
 }
 
 // readBinary reads and returns a binary number from the current position, or a non-nil error on failure
-func (s *Scanner) readBinary() ([]byte, error) {
+func (s *Scanner) readBinary(prefixLen int) ([]byte, error) {
 	n := 0
 	return s.readNumericBase(func(c rune) bool {
-		if n < 2 {
-			// skip 0b
+		if n < prefixLen {
+			// skip optional sign and 0b
 			n++
 			return true
 		}
 		return c == '0' || c == '1' || c == '_'
-	})
+	}, prefixLen)
 }

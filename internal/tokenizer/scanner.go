@@ -676,6 +676,10 @@ func (s *Scanner) readNext() (Token, error) {
 			if token.ID, token.Data, err = s.readIdentifier(); err != nil {
 				return token, err
 			}
+		} else if c2 == '0' && s.isSignedPrefixedNumber() {
+			if err = s.readSignedPrefixedNumber(&token); err != nil {
+				return token, err
+			}
 		} else if isDigit(c2) {
 			s.log("calling readDecimal")
 			if token.ID, token.Data, err = s.readDecimal(); err != nil {
@@ -698,19 +702,19 @@ func (s *Scanner) readNext() (Token, error) {
 			switch c {
 			case 'x':
 				token.ID = Hexadecimal
-				if token.Data, err = s.readHexadecimal(); err != nil {
+				if token.Data, err = s.readHexadecimal(2); err != nil {
 					return token, err
 				}
 
 			case 'o':
 				token.ID = Octal
-				if token.Data, err = s.readOctal(); err != nil {
+				if token.Data, err = s.readOctal(2); err != nil {
 					return token, err
 				}
 
 			case 'b':
 				token.ID = Binary
-				if token.Data, err = s.readBinary(); err != nil {
+				if token.Data, err = s.readBinary(2); err != nil {
 					return token, err
 				}
 
