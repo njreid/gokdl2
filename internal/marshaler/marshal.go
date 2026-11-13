@@ -311,7 +311,7 @@ func tryMarshalValueAsChild(c *marshalContext, nameIntf interface{}, val reflect
 		return nil, false, true, nil
 	}
 
-	typeDetails := c.indexer.Get(val.Type().String())
+	typeDetails := c.indexer.Get(val.Type())
 	// if it implements a marshaler interface, it definitely doesn't marshal into child nodes
 	if typeDetails != nil && typeDetails.CanMarshalKDL() {
 		return nil, false, false, nil
@@ -466,9 +466,9 @@ func marshalTextValue(srcStruct reflect.Value, typeDetails *typeDetails, format 
 			if len(b) == 0 {
 				return &document.Value{Value: ""}, nil
 			} else {
-				token, err := tokenizer.ScanOne(b)
-				if err != nil {
-					// if it can't be scanned, it's a just a bare string
+				token, consumed, err := tokenizer.ScanOneN(b)
+				if err != nil || consumed != len(b) {
+					// if it can't be scanned, or the token doesn't span the entire text, it's a just a bare string
 					return &document.Value{Value: string(b)}, nil
 				}
 				switch token.ID {
@@ -514,7 +514,7 @@ func marshalKDLValue(srcStruct reflect.Value, typeDetails *typeDetails, format s
 }
 
 func reflectValueToDocumentValue(c *marshalContext, rv reflect.Value, dv *document.Value, format string) (err error) {
-	typeStr := rv.Type().String()
+	typeStr := rv.Type()
 	typeDetails := c.indexer.Get(typeStr)
 
 	if typeDetails != nil && typeDetails.CanMarshalKDLValue() {
@@ -543,7 +543,7 @@ func reflectValueToDocumentValue(c *marshalContext, rv reflect.Value, dv *docume
 }
 
 func marshalStructToNode(c *marshalContext, name string, structValue reflect.Value, fldDetails *structFieldDetails) (*document.Node, error) {
-	typeDetails := c.indexer.Get(structValue.Type().String())
+	typeDetails := c.indexer.Get(structValue.Type())
 	structure := typeDetails.GetStructure(structValue)
 
 	node := document.NewNode()
@@ -664,7 +664,7 @@ func assignCommentToNode(c *marshalContext, structure *structStructure, node *do
 func marshalValueWithMarshaler(c *marshalContext, name string, value reflect.Value, fldDetails *structFieldDetails) (node *document.Node, err error) {
 	v := reflect.Indirect(value)
 
-	typeDetails := c.indexer.Get(value.Type().String())
+	typeDetails := c.indexer.Get(value.Type())
 	if typeDetails != nil {
 		if typeDetails.CanMarshalKDL() {
 			return marshalKDLNode(c, name, value, typeDetails)
@@ -808,7 +808,7 @@ func marshalMultiSliceToNodes(c *marshalContext, name string, value reflect.Valu
 			return nil, err
 		} else if child != nil {
 			if el.Kind() == reflect.Struct && child.Comment == nil {
-				typDetails := c.indexer.Get(el.Type().String())
+				typDetails := c.indexer.Get(el.Type())
 				if structure := typDetails.GetStructure(el); structure != nil {
 					if comment := structure.Get("__parent", nil); comment != nil {
 						child.Comment = comment
@@ -844,7 +844,7 @@ func marshalMultiMapToNodes(c *marshalContext, names []string, value reflect.Val
 				return nil, err
 			} else if child != nil {
 				if el.Kind() == reflect.Struct && child.Comment == nil {
-					typDetails := c.indexer.Get(el.Type().String())
+					typDetails := c.indexer.Get(el.Type())
 					if structure := typDetails.GetStructure(el); structure != nil {
 						if comment := structure.Get("__parent", nil); comment != nil {
 							child.Comment = comment
@@ -904,7 +904,7 @@ func marshalStructToNodes(c *marshalContext, structValue reflect.Value, nodes []
 		return node.Children, nil
 	}
 
-	typeDetails := c.indexer.Get(structValue.Type().String())
+	typeDetails := c.indexer.Get(structValue.Type())
 	structure := typeDetails.GetStructure(structValue)
 
 	if nodes == nil {

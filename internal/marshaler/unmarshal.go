@@ -242,7 +242,7 @@ func unmarshalValueTime(c *unmarshalContext, destTime reflect.Value, val interfa
 
 func unmarshalIntfWithUnmarshaler(c *unmarshalContext, dest reflect.Value, v interface{}, format string) (bool, error) {
 	destType := dest.Type()
-	if typeDetails := c.indexer.Get(destType.String()); typeDetails != nil {
+	if typeDetails := c.indexer.Get(destType); typeDetails != nil {
 		if typeDetails.CanUnmarshalKDLValue() {
 			var err error
 			dv := &document.Value{Value: v}
@@ -263,7 +263,7 @@ func unmarshalIntfWithUnmarshaler(c *unmarshalContext, dest reflect.Value, v int
 
 func unmarshalDocumentValueWithUnmarshaler(c *unmarshalContext, dest reflect.Value, dv *document.Value, format string) (bool, error) {
 	destType := dest.Type()
-	if typeDetails := c.indexer.Get(destType.String()); typeDetails != nil {
+	if typeDetails := c.indexer.Get(destType); typeDetails != nil {
 		if typeDetails.CanUnmarshalKDLValue() {
 			var err error
 			if typeDetails.CustomArshalers.Has(hasCustomValueUnmarshaler) {
@@ -283,7 +283,7 @@ func unmarshalDocumentValueWithUnmarshaler(c *unmarshalContext, dest reflect.Val
 
 func unmarshalNodeWithUnmarshaler(c *unmarshalContext, dest reflect.Value, node *document.Node, format string) (bool, reflect.Value, error) {
 	destType := dest.Type()
-	if typeDetails := c.indexer.Get(destType.String()); typeDetails != nil {
+	if typeDetails := c.indexer.Get(destType); typeDetails != nil {
 		if typeDetails.CanUnmarshalKDL() {
 			var err error
 			if typeDetails.CustomArshalers.Has(hasCustomUnmarshaler) {
@@ -611,7 +611,7 @@ func createMapIfNil(mapValue reflect.Value, size int) {
 //
 // Conversion rules for keys and values are per setReflectValueFromIntf.
 func unmarshalNodeToStruct(c *unmarshalContext, node *document.Node, destStruct reflect.Value) (reflect.Value, error) {
-	structName := destStruct.Type().String()
+	structName := destStruct.Type()
 	typeDetails := c.indexer.Get(structName)
 
 	argFieldInfo := typeDetails.StructAttrs["arg"]
@@ -1206,7 +1206,7 @@ func unmarshalNodeToMultiple(c *unmarshalContext, node *document.Node, destValue
 
 			// another attempt to preserve corner-case comments
 			if el.Type().Kind() == reflect.Struct && node.Comment != nil {
-				structName := el.Type().String()
+				structName := el.Type()
 				typeDetails := c.indexer.Get(structName)
 				if node.Comment != nil {
 					typeDetails.SetStructure(el, "__parent", node)
@@ -1322,7 +1322,7 @@ func unmarshalNodeToValue(c *unmarshalContext, node *document.Node, destValue *r
 // unmarshalNodeToValue.
 func unmarshalNodeToStructField(c *unmarshalContext, node *document.Node, destStruct reflect.Value) error {
 	name := node.Name.ValueString()
-	typeDetails := c.indexer.Get(destStruct.Type().String())
+	typeDetails := c.indexer.Get(destStruct.Type())
 	safeName := normalizeKey(name, c.indexer.caseSensitive)
 	destFieldInfo, exists := typeDetails.StructFields[safeName]
 	if !exists {

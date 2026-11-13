@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/njreid/gokdl2/document"
@@ -218,23 +219,32 @@ func (t *typeDetails) GetStructure(structValue reflect.Value) *structStructure {
 }
 
 type typeIndexer struct {
-	index         map[string]*typeDetails
+	index         map[reflect.Type]*typeDetails
 	caseSensitive bool
 }
 
 var createdTypeIndexer atomic.Bool
 
+type typeCacheKey struct {
+	typ           reflect.Type
+	caseSensitive bool
+}
+
+// typeDetailsCache holds fully-built, immutable *typeDetails per (type, caseSensitive). Custom marshalers can only
+// be registered before the first indexer is created, so entries never go stale.
+var typeDetailsCache sync.Map
+
 func newTypeIndexer(caseSensitive bool) *typeIndexer {
 	createdTypeIndexer.CompareAndSwap(false, true)
 	return &typeIndexer{
-		index:         make(map[string]*typeDetails),
+		index:         make(map[reflect.Type]*typeDetails),
 		caseSensitive: caseSensitive,
 	}
 }
 
 func (i *typeIndexer) Dump() {
 	for k, v := range i.index {
-		fmt.Printf("[%s](%d)=%#v\n", k, len(k), v)
+		fmt.Printf("[%s]=%#v\n", k, v)
 	}
 }
 
@@ -253,14 +263,28 @@ func (i *typeIndexer) indexType(typ reflect.Type) error {
 		return nil
 	}
 
-	typName := typ.String()
-	if _, exists := i.index[typName]; exists {
+	if _, exists := i.index[typ]; exists {
 		Debug("    already indexed, skipping")
 		return nil
 	}
 
+	cacheKey := typeCacheKey{typ, i.caseSensitive}
+	if cached, ok := typeDetailsCache.Load(cacheKey); ok {
+		i.index[typ] = cached.(*typeDetails)
+		return nil
+	}
+
 	typeDetails := newTypeDetails()
-	i.index[typName] = typeDetails
+	i.index[typ] = typeDetails
+	if err := i.buildTypeDetails(typ, typeDetails); err != nil {
+		return err
+	}
+	typeDetailsCache.Store(cacheKey, typeDetails)
+	return nil
+}
+
+func (i *typeIndexer) buildTypeDetails(typ reflect.Type, typeDetails *typeDetails) error {
+	typName := typ.String()
 
 	if _, ok := customUnmarshalers[typ]; ok {
 		typeDetails.CustomArshalers |= hasCustomUnmarshaler
@@ -435,20 +459,22 @@ func (i *typeIndexer) IndexIntf(dest interface{}) error {
 	return i.indexType(t)
 }
 
-func (i *typeIndexer) Get(name string) *typeDetails {
-	if len(name) == 0 {
+// Get returns the details for typ (pointers are dereferenced), indexing the type lazily if it has not been seen yet
+// (e.g. dynamic types stored in interface values). An indexer is used by a single goroutine.
+func (i *typeIndexer) Get(typ reflect.Type) *typeDetails {
+	for typ != nil && typ.Kind() == reflect.Ptr {
+		typ = typ.Elem()
+	}
+	if typ == nil {
 		return nil
 	}
-	if name[0] == '*' {
-		name = name[1:]
-	}
-	if v, ok := i.index[name]; ok {
-		Debug("typeIndexer \"%s\" exists", name)
+	if v, ok := i.index[typ]; ok {
 		return v
-	} else {
-		Debug("typeIndexer \"%s\" does not exist", name)
+	}
+	if err := i.indexType(typ); err != nil {
 		return nil
 	}
+	return i.index[typ]
 }
 
 func (i *typeIndexer) GetEmpty() *typeDetails {
