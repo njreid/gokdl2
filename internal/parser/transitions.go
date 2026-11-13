@@ -47,7 +47,12 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 				}
 			}
 			if c.typeAnnot.Valid() {
-				node.Type = document.TypeAnnotation(c.typeAnnot.Data)
+				ta, err := document.TypeAnnotationFromToken(c.typeAnnot)
+				if err != nil {
+					return err
+				}
+				node.Type = ta
+				node.EmptyType = ta == ""
 				c.typeAnnot.Clear()
 			}
 			c.pushState(stateNode)
@@ -153,7 +158,12 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 				}
 			}
 			if c.typeAnnot.Valid() {
-				node.Type = document.TypeAnnotation(c.typeAnnot.Data)
+				ta, err := document.TypeAnnotationFromToken(c.typeAnnot)
+				if err != nil {
+					return err
+				}
+				node.Type = ta
+				node.EmptyType = ta == ""
 				c.typeAnnot.Clear()
 			}
 			c.pushState(stateNode)

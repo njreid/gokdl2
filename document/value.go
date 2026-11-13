@@ -47,6 +47,8 @@ func (f ValueFlag) Has(flag ValueFlag) bool {
 type Value struct {
 	// Type is the value type, if an annotation was provided
 	Type TypeAnnotation
+	// EmptyType is true when an explicitly empty type annotation, eg `("")1`, was present
+	EmptyType bool
 	// Value is the actual value
 	Value interface{}
 	// Flag is any flag assigned for use in output
@@ -322,10 +324,10 @@ func (v *Value) string(opts valueOpts, version tokenizer.Version) string {
 		opts |= voVersionV2
 	}
 	var b []byte
-	if len(v.Type) > 0 {
+	if len(v.Type) > 0 || v.EmptyType {
 		b = make([]byte, 0, 32)
 		b = append(b, '(')
-		b = append(b, v.Type...)
+		b = appendTypeAnnotationName(b, v.Type, version)
 		b = append(b, ')')
 	}
 
