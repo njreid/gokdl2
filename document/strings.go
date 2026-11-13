@@ -44,6 +44,9 @@ func QuoteString(s string) string {
 // AppendQuotedString is based on the JSON string quoting function from the MIT-Licensed ZeroLog, Copyright (c) 2017
 // Olivier Poitrey, but has been heavily modified to improve performance and use KDL string escapes instead of JSON.
 func AppendQuotedString(b []byte, s string, quote byte) []byte {
+	if quote != '"' {
+		return appendQuotedStringGeneric(b, s, quote)
+	}
 	b = append(b, quote)
 
 	// use uints for bounds-check elimination
@@ -74,7 +77,16 @@ func AppendQuotedString(b []byte, s string, quote byte) []byte {
 						if start < i {
 							b = append(b, s[start:i]...)
 						}
-						b = append(b, `\ufffd`...)
+						b = append(b, `\u{fffd}`...)
+						i += uint(size)
+						start = i
+						continue
+					}
+					if mustEscapeRune(r) {
+						if start < i {
+							b = append(b, s[start:i]...)
+						}
+						b = appendUnicodeEscape(b, r)
 						i += uint(size)
 						start = i
 						continue
@@ -105,8 +117,7 @@ func AppendQuotedString(b []byte, s string, quote byte) []byte {
 				case '\f':
 					b = append(b, '\\', 'f')
 				default:
-					b = append(b, '\\', 'u')
-					b = strconv.AppendUint(b, uint64(c), 16)
+					b = appendUnicodeEscape(b, rune(c))
 				}
 				i++
 				start = i
@@ -125,6 +136,72 @@ func AppendQuotedString(b []byte, s string, quote byte) []byte {
 	b = append(b, quote)
 
 	return b
+}
+
+// appendUnicodeEscape appends r as a KDL unicode escape, \u{...}.
+func appendUnicodeEscape(b []byte, r rune) []byte {
+	b = append(b, '\\', 'u', '{')
+	b = strconv.AppendUint(b, uint64(r), 16)
+	return append(b, '}')
+}
+
+// mustEscapeRune reports whether the non-ASCII rune r cannot appear literally in a KDL v2 string: newlines
+// (NEL, LS, PS), U+FFFD (the tokenizer rejects it as invalid UTF-8), the byte order mark and bidirectional control characters.
+func mustEscapeRune(r rune) bool {
+	switch {
+	case r == 0x85, r == 0x2028, r == 0x2029, r == 0xFEFF, r == 0xFFFD:
+		return true
+	case r == 0x200E, r == 0x200F:
+		return true
+	case r >= 0x202A && r <= 0x202E:
+		return true
+	case r >= 0x2066 && r <= 0x2069:
+		return true
+	}
+	return false
+}
+
+// appendQuotedStringGeneric is the slower general form of AppendQuotedString that supports any quote character (for
+// example '`' for expression strings). Only the quote character, backslash and characters that cannot appear
+// literally are escaped.
+func appendQuotedStringGeneric(b []byte, s string, quote byte) []byte {
+	b = append(b, quote)
+	for i := 0; i < len(s); {
+		c := s[i]
+		if c >= utf8.RuneSelf {
+			r, size := utf8.DecodeRuneInString(s[i:])
+			if (r == utf8.RuneError && size == 1) || mustEscapeRune(r) {
+				if r == utf8.RuneError && size == 1 {
+					r = utf8.RuneError
+				}
+				b = appendUnicodeEscape(b, r)
+			} else {
+				b = append(b, s[i:i+size]...)
+			}
+			i += size
+			continue
+		}
+		switch {
+		case c == quote, c == '\\':
+			b = append(b, '\\', c)
+		case c == '\n':
+			b = append(b, '\\', 'n')
+		case c == '\r':
+			b = append(b, '\\', 'r')
+		case c == '\t':
+			b = append(b, '\\', 't')
+		case c == '\b':
+			b = append(b, '\\', 'b')
+		case c == '\f':
+			b = append(b, '\\', 'f')
+		case c < 0x20 || c == 0x7f:
+			b = appendUnicodeEscape(b, rune(c))
+		default:
+			b = append(b, c)
+		}
+		i++
+	}
+	return append(b, quote)
 }
 
 const empty = ""
@@ -690,28 +767,37 @@ func AppendMultiLineString(b []byte, s string) []byte {
 
 // AppendMultiLineExpressionString appends s, quoted for use as a triple-backtick multi-line expression string.
 func AppendMultiLineExpressionString(b []byte, s string) []byte {
-	b = appendMultiLineQuotedString(b, s, '`', "```")
-	if len(s) > 0 && s[len(s)-1] != '\n' {
-		b = append(b[:len(b)-3], '\n')
-		b = append(b, '`', '`', '`')
-	}
-	return b
+	return appendMultiLineQuotedString(b, s, '`', "```")
 }
 
+// appendMultiLineQuotedString appends s as a multi-line string delimited by delim. The opening delimiter and the
+// closing delimiter are each on a line of their own, and the closing delimiter is not indented, so no content is
+// dedented when the result is parsed.
 func appendMultiLineQuotedString(b []byte, s string, quote byte, delim string) []byte {
 	b = append(b, delim...)
 	b = append(b, '\n')
 
-	lines := strings.Split(s, "\n")
-	for i, line := range lines {
+	if s != "" {
 		var lineBuf []byte
-		lineBuf = AppendQuotedString(lineBuf, line, quote)
-		if len(lineBuf) >= 2 {
+		for i, line := range strings.Split(s, "\n") {
+			if i > 0 {
+				b = append(b, '\n')
+			}
+			if line != "" && strings.TrimSpace(line) == "" {
+				// whitespace-only lines are treated as empty when dedenting, so escape the whitespace to keep it
+				for _, r := range line {
+					if r == ' ' {
+						b = append(b, '\\', 's')
+					} else {
+						b = appendUnicodeEscape(b, r)
+					}
+				}
+				continue
+			}
+			lineBuf = AppendQuotedString(lineBuf[:0], line, quote)
 			b = append(b, lineBuf[1:len(lineBuf)-1]...)
 		}
-		if i < len(lines)-1 {
-			b = append(b, '\n')
-		}
+		b = append(b, '\n')
 	}
 
 	b = append(b, delim...)
@@ -750,8 +836,8 @@ func AppendMultiLineStringV2(b []byte, s string, hashCount int) []byte {
 		b = append(b, '#')
 	}
 	b = append(b, '"', '"', '"', '\n')
-	b = append(b, s...)
-	if len(s) > 0 && s[len(s)-1] != '\n' {
+	if s != "" {
+		b = append(b, s...)
 		b = append(b, '\n')
 	}
 	b = append(b, '"', '"', '"')

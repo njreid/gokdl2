@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io"
 	"strings"
+	"sync"
 
 	"github.com/njreid/gokdl2/internal/tokenizer"
 )
@@ -264,26 +265,54 @@ func (n *Node) WriteTo(w io.Writer) (int64, error) {
 	return n.WriteToOptions(w, defaultNodeWriteOptions)
 }
 
-// WriteToOptions writes the KDL representation of this node with the specified options.
+// nodeBufPool holds reusable output buffers for WriteToOptions.
+var nodeBufPool = sync.Pool{
+	New: func() interface{} {
+		b := make([]byte, 0, 512)
+		return &b
+	},
+}
+
+// maxPooledBuf is the largest buffer that is returned to nodeBufPool.
+const maxPooledBuf = 64 << 10
+
+// WriteToOptions writes the KDL representation of this node with the specified options. The output for each node is
+// assembled in a single buffer and written with one Write call (children are written by their own calls). Writing
+// stops at the first error, which is returned along with the number of bytes written so far.
 func (n *Node) WriteToOptions(w io.Writer, opts NodeWriteOptions) (int64, error) {
 	var (
 		nw  int64
 		err error
 	)
-	write := func(b []byte) {
-		n, e := w.Write(b)
-		nw += int64(n)
-		err = e
+	bp := nodeBufPool.Get().(*[]byte)
+	buf := (*bp)[:0]
+	defer func() {
+		if cap(buf) <= maxPooledBuf {
+			*bp = buf[:0]
+			nodeBufPool.Put(bp)
+		}
+	}()
+
+	flush := func() {
+		if len(buf) > 0 && err == nil {
+			var written int
+			written, err = w.Write(buf)
+			nw += int64(written)
+		}
+		buf = buf[:0]
+	}
+	appendIndent := func(b []byte, depth int) []byte {
+		for i := 0; i < depth; i++ {
+			b = append(b, opts.Indent...)
+		}
+		return b
 	}
 
-	var indent []byte
-	if opts.Depth > 0 && opts.LeadingTrailingSpace {
-		indent = bytes.Repeat(opts.Indent, opts.Depth)
-	}
+	indented := opts.Depth > 0 && opts.LeadingTrailingSpace
+	v2 := opts.Version == tokenizer.VersionV2
 
 	if n.Comment != nil {
 		if n.Comment.Before != nil {
-			// println("BEFORE [" + string(n.Comment.Before) + "]")
 			comment := bytes.Trim(n.Comment.Before, " \t")
 			lines := bytes.Split(comment, []byte{'\n'})
 
@@ -291,128 +320,96 @@ func (n *Node) WriteToOptions(w io.Writer, opts NodeWriteOptions) (int64, error)
 			for _, line := range lines {
 				line = bytes.TrimSpace(line)
 				if len(line) > 0 {
-					write(indent)
-					write(line)
+					if indented {
+						buf = appendIndent(buf, opts.Depth)
+					}
+					buf = append(buf, line...)
 					newlineCount = 0
 				} else {
 					newlineCount++
 				}
 				if newlineCount < 2 {
-					write([]byte{'\n'})
+					buf = append(buf, '\n')
 				}
 			}
 		}
 	}
 
-	if opts.Depth > 0 && opts.LeadingTrailingSpace {
-		write(indent)
+	if indented {
+		buf = appendIndent(buf, opts.Depth)
 	}
 	if opts.NameAndType {
 		if len(n.Type) > 0 || n.EmptyType {
-			if err == nil {
-				write([]byte{'('})
-			}
-			if err == nil {
-				write(appendTypeAnnotationName(nil, n.Type, opts.Version))
-			}
-			if err == nil {
-				write([]byte{')'})
-			}
+			buf = append(buf, '(')
+			buf = appendTypeAnnotationName(buf, n.Type, opts.Version)
+			buf = append(buf, ')')
 		}
-		if err == nil {
-			// node names don't need to be quoted unless they include non-Identifier characters
-			if opts.Version == tokenizer.VersionV2 {
-				write([]byte(n.Name.NodeNameStringV2()))
-			} else {
-				write([]byte(n.Name.NodeNameString()))
-			}
+		// node names don't need to be quoted unless they include non-Identifier characters
+		if v2 {
+			buf = n.Name.appendString(buf, voSimpleString, tokenizer.VersionV2)
+		} else {
+			buf = n.Name.appendString(buf, voSimpleString, tokenizer.VersionV1)
 		}
 	}
 
 	if opts.AddEquals && len(n.Arguments) > 0 && !n.Properties.Exist() && len(n.Children) == 0 {
-		write([]byte{' ', '='})
+		buf = append(buf, ' ', '=')
 	} else if opts.AddColons && len(n.Arguments) > 0 && !n.Properties.Exist() && len(n.Children) == 0 {
-		write([]byte{':'})
+		buf = append(buf, ':')
 	}
 
+	// arguments must always be quoted
+	argOpts := argValueOpts(opts.IgnoreFlags, opts.Version)
 	for i, arg := range n.Arguments {
-		if err == nil && (opts.NameAndType || i > 0) {
-			write([]byte{' '})
+		if opts.NameAndType || i > 0 {
+			buf = append(buf, ' ')
 		}
-		if err == nil {
-			// arguments must always be quoted
-			if opts.Version == tokenizer.VersionV2 {
-				if opts.IgnoreFlags {
-					write([]byte(arg.UnformattedStringV2()))
-				} else {
-					write([]byte(arg.FormattedStringV2()))
-				}
-			} else {
-				if opts.IgnoreFlags {
-					write([]byte(arg.UnformattedString()))
-				} else {
-					write([]byte(arg.FormattedString()))
-				}
-			}
-		}
+		buf = arg.appendString(buf, argOpts, opts.Version)
 	}
-	if n.Properties.Exist() && err == nil {
-		if opts.Version == tokenizer.VersionV2 {
-			if opts.IgnoreFlags {
-				write([]byte(n.Properties.UnformattedStringV2()))
-			} else {
-				write([]byte(n.Properties.StringV2()))
-			}
-		} else {
-			if opts.IgnoreFlags {
-				write([]byte(n.Properties.UnformattedString()))
-			} else {
-				write([]byte(n.Properties.String()))
-			}
-		}
-	}
-	if err == nil {
-		if len(n.Children) > 0 {
-			write([]byte{' ', '{', '\n'})
-
-			opts.Depth++
-			if err == nil {
-				for _, n := range n.Children {
-					if nnw, err := n.WriteToOptions(w, opts); err != nil {
-						break
-					} else {
-						nw += nnw
-					}
-				}
-			}
-			opts.Depth--
-
-			if opts.Depth > 0 && err == nil {
-				write(bytes.Repeat(opts.Indent, opts.Depth))
-			}
-			if err == nil {
-				write([]byte{'}'})
-			}
-		} else if opts.AddSemicolons {
-			write([]byte{';'})
-		}
+	if n.Properties.Exist() {
+		buf = n.Properties.appendTo(buf, opts.IgnoreFlags, opts.Version)
 	}
 
-	if err == nil {
-		if n.Comment != nil && n.Comment.After != nil {
-			comment := bytes.Trim(n.Comment.After, " \t")
-			lines := bytes.Split(comment, []byte{'\n'})
-
-			for _, line := range lines {
-				write(indent)
-				write(bytes.TrimSpace(line))
-				write([]byte{'\n'})
-			}
-		} else if opts.LeadingTrailingSpace {
-			write([]byte{'\n'})
+	if len(n.Children) > 0 {
+		buf = append(buf, ' ', '{', '\n')
+		flush()
+		if err != nil {
+			return nw, err
 		}
 
+		childOpts := opts
+		childOpts.Depth++
+		for _, child := range n.Children {
+			cnw, cerr := child.WriteToOptions(w, childOpts)
+			nw += cnw
+			if cerr != nil {
+				return nw, cerr
+			}
+		}
+
+		if opts.Depth > 0 {
+			buf = appendIndent(buf, opts.Depth)
+		}
+		buf = append(buf, '}')
+	} else if opts.AddSemicolons {
+		buf = append(buf, ';')
 	}
+
+	if n.Comment != nil && n.Comment.After != nil {
+		comment := bytes.Trim(n.Comment.After, " \t")
+		lines := bytes.Split(comment, []byte{'\n'})
+
+		for _, line := range lines {
+			if indented {
+				buf = appendIndent(buf, opts.Depth)
+			}
+			buf = append(buf, bytes.TrimSpace(line)...)
+			buf = append(buf, '\n')
+		}
+	} else if opts.LeadingTrailingSpace {
+		buf = append(buf, '\n')
+	}
+	flush()
 
 	return nw, err
 }
