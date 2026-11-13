@@ -71,11 +71,7 @@ func (p *Parser) NewContext() *ParseContext {
 
 func (p *Parser) NewContextOptions(opts ParseContextOptions) *ParseContext {
 	doc := document.New()
-	var alloc *document.Allocator
-	if opts.InputSizeEstimate > 0 {
-		alloc = document.NewAllocator(opts.InputSizeEstimate / 25)
-		doc.Retain(alloc)
-	}
+	alloc := document.NewAllocator(opts.InputSizeEstimate / 25)
 	return &ParseContext{
 		doc:   doc,
 		alloc: alloc,
