@@ -28,6 +28,9 @@ func (s *Scanner) consumeFast(n int) {
 	s.input = s.input[n:]
 	s.len -= n
 	s.column += n
+	if n > 0 {
+		s.prevCR = false
+	}
 }
 
 // identChars returns a table of the ASCII bytes that may continue a bare identifier under the scanner's current
@@ -109,9 +112,11 @@ func (s *Scanner) readQuotedStringFast(q byte) ([]byte, error) {
 	in := s.input
 	v2 := s.Version == VersionV2
 	line, col := s.line, s.column
+	prevCR := s.prevCR
 
 	i := 1 // the opening quote
 	col++
+	prevCR = false
 	var (
 		escaped, folding, done bool
 		err                    error
@@ -122,6 +127,9 @@ func (s *Scanner) readQuotedStringFast(q byte) ([]byte, error) {
 			j := i
 			for j < len(in) && in[j] != q && !quoteStop[in[j]] {
 				j++
+			}
+			if j > i {
+				prevCR = false
 			}
 			col += j - i
 			i = j
@@ -177,12 +185,15 @@ func (s *Scanner) readQuotedStringFast(q byte) ([]byte, error) {
 		}
 
 		i += size
-		if isNewline(c) {
+		if c == '\n' && prevCR {
+			// second half of a CRLF pair
+		} else if isNewline(c) {
 			line++
 			col = 1
 		} else {
 			col++
 		}
+		prevCR = c == '\r'
 	}
 
 	if done && i < len(in) && in[i] >= utf8.RuneSelf {
@@ -196,7 +207,7 @@ func (s *Scanner) readQuotedStringFast(q byte) ([]byte, error) {
 	s.peeked = s.peeked[:0]
 	s.input = in[i:]
 	s.len -= i
-	s.line, s.column = line, col
+	s.line, s.column, s.prevCR = line, col, prevCR
 	switch {
 	case err != nil:
 		return nil, err
