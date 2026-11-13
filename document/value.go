@@ -47,6 +47,8 @@ func (f ValueFlag) Has(flag ValueFlag) bool {
 type Value struct {
 	// Type is the value type, if an annotation was provided
 	Type TypeAnnotation
+	// EmptyType is true when an explicitly empty type annotation, eg `("")1`, was present
+	EmptyType bool
 	// Value is the actual value
 	Value interface{}
 	// Flag is any flag assigned for use in output
@@ -322,10 +324,10 @@ func (v *Value) string(opts valueOpts, version tokenizer.Version) string {
 		opts |= voVersionV2
 	}
 	var b []byte
-	if len(v.Type) > 0 {
+	if len(v.Type) > 0 || v.EmptyType {
 		b = make([]byte, 0, 32)
 		b = append(b, '(')
-		b = append(b, v.Type...)
+		b = appendTypeAnnotationName(b, v.Type, version)
 		b = append(b, ')')
 	}
 
@@ -475,12 +477,22 @@ func stripUnderscores(b []byte, underscoreCount int) []byte {
 // parseNumber parses a number from b in the specified base, and returns an interface{} containing either a float64,
 // an int64, a *big.Float, or a *big.Int, depending on the size and type of the number in b
 func parseNumber(b []byte, base int) (interface{}, error) {
+	var sign []byte
 	if base != 10 {
+		if len(b) > 0 && (b[0] == '+' || b[0] == '-') {
+			if b[0] == '-' {
+				sign = b[:1]
+			}
+			b = b[1:]
+		}
 		b = b[2:] // strip 0x, 0o, 0b
 	}
 	underscoreCount, float := classifyNumber(b, base)
 	b = stripUnderscores(b, underscoreCount)
 	bstr := bytesToString(b)
+	if sign != nil {
+		bstr = "-" + bstr
+	}
 
 	var (
 		v   interface{}

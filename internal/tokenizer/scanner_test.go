@@ -578,7 +578,7 @@ func TestTokenizerProfile(t *testing.T) {
 	testCases := loadTestCases()
 	println(len(testCases), "test cases")
 
-	cpuf, err := os.Create("cpu.pprof")
+	cpuf, err := os.Create(filepath.Join(t.TempDir(), "cpu.pprof"))
 	if err != nil {
 		panic(fmt.Sprintf("Failed to create CPU profile: %v", err))
 	}
@@ -588,7 +588,7 @@ func TestTokenizerProfile(t *testing.T) {
 		_ = cpuf.Close()
 	}()
 
-	memf, err := os.Create("mem.pprof")
+	memf, err := os.Create(filepath.Join(t.TempDir(), "mem.pprof"))
 	if err != nil {
 		panic(fmt.Sprintf("Failed to create memory profile: %v", err))
 	}

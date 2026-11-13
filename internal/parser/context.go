@@ -147,7 +147,12 @@ func (c *ParseContext) addArgumentToken(n *document.Node, t tokenizer.Token, typ
 		return err
 	}
 	if typeAnnot.Valid() {
-		v.Type = document.TypeAnnotation(typeAnnot.Data)
+		ta, err := document.TypeAnnotationFromToken(typeAnnot)
+		if err != nil {
+			return err
+		}
+		v.Type = ta
+		v.EmptyType = ta == ""
 	}
 	n.AddArgumentValue(v)
 	return nil
@@ -163,7 +168,12 @@ func (c *ParseContext) addPropertyToken(n *document.Node, name tokenizer.Token, 
 		return nil, err
 	}
 	if typeAnnot.Valid() {
-		vt.Type = document.TypeAnnotation(typeAnnot.Data)
+		ta, err := document.TypeAnnotationFromToken(typeAnnot)
+		if err != nil {
+			return nil, err
+		}
+		vt.Type = ta
+		vt.EmptyType = ta == ""
 	}
 	return n.AddPropertyValue(nt.ValueString(), vt, ""), nil
 }
