@@ -146,10 +146,10 @@ func appendUnicodeEscape(b []byte, r rune) []byte {
 }
 
 // mustEscapeRune reports whether the non-ASCII rune r cannot appear literally in a KDL v2 string: newlines
-// (NEL, LS, PS), the byte order mark and bidirectional control characters.
+// (NEL, LS, PS), U+FFFD (the tokenizer rejects it as invalid UTF-8), the byte order mark and bidirectional control characters.
 func mustEscapeRune(r rune) bool {
 	switch {
-	case r == 0x85, r == 0x2028, r == 0x2029, r == 0xFEFF:
+	case r == 0x85, r == 0x2028, r == 0x2029, r == 0xFEFF, r == 0xFFFD:
 		return true
 	case r == 0x200E, r == 0x200F:
 		return true
@@ -334,7 +334,7 @@ func AppendUnquotedString(b []byte, s string, quote byte) ([]byte, error) {
 					if i >= lenS {
 						return b, ErrInvalid
 					}
-					if i-rstart > 6 {
+					if i-rstart > 6 || !allHexDigits(s[rstart:i]) {
 						return b, ErrInvalid
 					}
 
@@ -737,7 +737,7 @@ func appendUnquotedMultilineContent(b []byte, s string, quote byte, allowTrailin
 			for j < len(s) && s[j] != '}' {
 				j++
 			}
-			if j >= len(s) || j-start > 6 {
+			if j >= len(s) || j-start > 6 || !allHexDigits(s[start:j]) {
 				return b, ErrInvalid
 			}
 			rn := rune(0)

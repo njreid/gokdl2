@@ -25,6 +25,8 @@ type Node struct {
 	Name *Value
 	// Type is the type annotation of the node, or an empty string if none
 	Type TypeAnnotation
+	// EmptyType is true when an explicitly empty type annotation, eg `("")node`, was present
+	EmptyType bool
 	// Arguments is the list of arguments for the node, or nil if none
 	Arguments []*Value
 	// Properties is the list of properties for the node, or nil if none
@@ -112,7 +114,12 @@ func (n *Node) AddArgumentToken(t tokenizer.Token, typeAnnot tokenizer.Token) er
 		return err
 	}
 	if typeAnnot.Valid() {
-		v.Type = TypeAnnotation(typeAnnot.Data)
+		ta, err := TypeAnnotationFromToken(typeAnnot)
+		if err != nil {
+			return err
+		}
+		v.Type = ta
+		v.EmptyType = ta == ""
 	}
 	n.Arguments = append(n.Arguments, v)
 	return nil
@@ -156,7 +163,12 @@ func (n *Node) AddPropertyToken(name tokenizer.Token, value tokenizer.Token, typ
 		return nil, err
 	}
 	if typeAnnot.Valid() {
-		vt.Type = TypeAnnotation(typeAnnot.Data)
+		ta, err := TypeAnnotationFromToken(typeAnnot)
+		if err != nil {
+			return nil, err
+		}
+		vt.Type = ta
+		vt.EmptyType = ta == ""
 	}
 
 	if !n.Properties.Allocated() {
@@ -327,9 +339,9 @@ func (n *Node) WriteToOptions(w io.Writer, opts NodeWriteOptions) (int64, error)
 		buf = appendIndent(buf, opts.Depth)
 	}
 	if opts.NameAndType {
-		if len(n.Type) > 0 {
+		if len(n.Type) > 0 || n.EmptyType {
 			buf = append(buf, '(')
-			buf = append(buf, n.Type...)
+			buf = appendTypeAnnotationName(buf, n.Type, opts.Version)
 			buf = append(buf, ')')
 		}
 		// node names don't need to be quoted unless they include non-Identifier characters
