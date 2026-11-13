@@ -257,7 +257,7 @@ func AppendUnquotedString(b []byte, s string, quote byte) ([]byte, error) {
 					if i >= lenS {
 						return b, ErrInvalid
 					}
-					if i-rstart > 6 {
+					if i-rstart > 6 || !allHexDigits(s[rstart:i]) {
 						return b, ErrInvalid
 					}
 
@@ -660,7 +660,7 @@ func appendUnquotedMultilineContent(b []byte, s string, quote byte, allowTrailin
 			for j < len(s) && s[j] != '}' {
 				j++
 			}
-			if j >= len(s) || j-start > 6 {
+			if j >= len(s) || j-start > 6 || !allHexDigits(s[start:j]) {
 				return b, ErrInvalid
 			}
 			rn := rune(0)

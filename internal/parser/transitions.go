@@ -461,11 +461,8 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			return nil
 		},
 		tokenizer.BraceClose: func(c *ParseContext, t tokenizer.Token) error {
-			_, _, err := c.popNodeAndState()
-			if err != nil {
-				return err
-			}
-			return ErrReenterState
+			// a property name without '=' and a value is incomplete
+			return unexpectedToken(c, t)
 		},
 	},
 	stateArgProp: {
@@ -642,11 +639,8 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			return nil
 		},
 		tokenizer.BraceClose: func(c *ParseContext, t tokenizer.Token) error {
-			_, _, err := c.popNodeAndState()
-			if err != nil {
-				return err
-			}
-			return ErrReenterState
+			// a property name with '=' but no value is incomplete
+			return unexpectedToken(c, t)
 		},
 	},
 }

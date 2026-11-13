@@ -477,12 +477,22 @@ func stripUnderscores(b []byte, underscoreCount int) []byte {
 // parseNumber parses a number from b in the specified base, and returns an interface{} containing either a float64,
 // an int64, a *big.Float, or a *big.Int, depending on the size and type of the number in b
 func parseNumber(b []byte, base int) (interface{}, error) {
+	var sign []byte
 	if base != 10 {
+		if len(b) > 0 && (b[0] == '+' || b[0] == '-') {
+			if b[0] == '-' {
+				sign = b[:1]
+			}
+			b = b[1:]
+		}
 		b = b[2:] // strip 0x, 0o, 0b
 	}
 	underscoreCount, float := classifyNumber(b, base)
 	b = stripUnderscores(b, underscoreCount)
 	bstr := bytesToString(b)
+	if sign != nil {
+		bstr = "-" + bstr
+	}
 
 	var (
 		v   interface{}
