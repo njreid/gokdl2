@@ -250,7 +250,7 @@ func (s *Scanner) readQuotedStringQ(q rune) ([]byte, error) {
 		}
 		switch c {
 		case '\\':
-			if s.Version == VersionV2 {
+			if s.Version == VersionV2 && !escaped {
 				next, perr := s.peekAt(1)
 				if perr == nil && next == '/' {
 					closureErr = fmt.Errorf("unexpected character %c", next)
