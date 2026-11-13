@@ -9,7 +9,7 @@ Prioritized by estimated impact × implementation feasibility. Updated after ful
 - Benchmarked replacing parser transition map dispatch with direct `switch` dispatch and reverted it: on this codebase it regressed parse throughput enough that it is not currently worth pursuing.
 - Current arena sizing uses real input length when available at the API boundary, and falls back to heap allocation if the pool estimate is exhausted.
 
-Measured against clean `HEAD` on the same machine with `go test -run=^$ -bench='Parse(Tiny|Flat|Properties|Nested|Large)$' -benchmem -count=3 ./perf/compare`:
+Measured against clean `HEAD` on the same machine with `go test -run=^$ -bench='BenchmarkParse' -benchmem -count=3 .`:
 
 - `ParseTiny`: roughly flat, allocs `22 -> 20`
 - `ParseFlat`: faster, allocs `401 -> 249`
@@ -207,11 +207,12 @@ Alternatively, use raw byte count with `inputBytes / 25` for nodes.
 
 ```
 go test -bench=. -benchmem ./...
-go tool pprof cpu.pprof   # existing profile in repo root
-go tool pprof mem.pprof   # existing allocation profile in repo root
+go test -run=^$ -bench=BenchmarkParseV2Auto -cpuprofile=cpu.pprof -memprofile=mem.pprof .
+go tool pprof cpu.pprof   # generated profile (git-ignored)
+go tool pprof mem.pprof   # generated allocation profile (git-ignored)
 ```
 
-Examine the existing `cpu.pprof` and `mem.pprof` before writing new benchmarks — they may already show the dominant hotspots. Start with items 1–3 (switch dispatch, arena, parseNumber) as they are independent and measurable in isolation.
+Generate and examine `cpu.pprof` and `mem.pprof` (above) before writing new benchmarks — they may already show the dominant hotspots. Start with items 1–3 (switch dispatch, arena, parseNumber) as they are independent and measurable in isolation.
 
 Current recommended order:
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	"runtime/pprof"
@@ -1203,11 +1204,16 @@ func TestUnmarshalMapTimes(t *testing.T) {
 	}
 	want := mt{
 		MapTimes: map[string]time.Time{
-			"test": time.Date(2023, 10, 8, 15, 54, 13, 0, time.Local),
+			"test": time.Date(2023, 10, 8, 15, 54, 13, 0, time.FixedZone("", -7*60*60)),
 		},
 	}
-	if !reflect.DeepEqual(want, got) {
-		t.Errorf("want: %#v\n got: %#v\n", want, got)
+	if len(got.MapTimes) != len(want.MapTimes) {
+		t.Fatalf("want: %#v\n got: %#v\n", want, got)
+	}
+	for k, w := range want.MapTimes {
+		if g, ok := got.MapTimes[k]; !ok || !g.Equal(w) {
+			t.Errorf("key %q: want %v, got %v", k, w, g)
+		}
 	}
 }
 
@@ -1290,7 +1296,7 @@ func TestUnmarshalSuite(t *testing.T) {
 }
 
 func TestUnmarshalProfile(t *testing.T) {
-	cpuf, err := os.Create("cpu.pprof")
+	cpuf, err := os.Create(filepath.Join(t.TempDir(), "cpu.pprof"))
 	if err != nil {
 		panic(fmt.Sprintf("Failed to create CPU profile: %v", err))
 	}
@@ -1300,7 +1306,7 @@ func TestUnmarshalProfile(t *testing.T) {
 		_ = cpuf.Close()
 	}()
 
-	memf, err := os.Create("mem.pprof")
+	memf, err := os.Create(filepath.Join(t.TempDir(), "mem.pprof"))
 	if err != nil {
 		panic(fmt.Sprintf("Failed to create memory profile: %v", err))
 	}
