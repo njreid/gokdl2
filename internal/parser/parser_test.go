@@ -690,10 +690,6 @@ func TestKDLOrgTestCases(t *testing.T) {
 }
 
 func TestKDLOrgTestCasesV2(t *testing.T) {
-	if os.Getenv("KDL_RUN_V2_CASES") == "" {
-		t.Skip("set KDL_RUN_V2_CASES=1 to run the vendored official v2 suite")
-	}
-
 	testCases := loadTestCases(tokenizer.VersionV2)
 	runTestCases(t, testCases, 0)
 }
@@ -1106,7 +1102,7 @@ func TestParserV2(t *testing.T) {
 			name:    "v2 multiline string",
 			input:   "node \"\"\"\n    hello\n    world\n    \"\"\"",
 			version: tokenizer.VersionV2,
-			expect:  "node \"\"\"\nhello\nworld\"\"\"",
+			expect:  "node \"\"\"\nhello\nworld\n\"\"\"",
 		},
 		{
 			name:    "v2 raw string",

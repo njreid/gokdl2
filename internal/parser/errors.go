@@ -86,7 +86,36 @@ func expectedInState(c *ParseContext) string {
 	}
 }
 
+// PosError is a parse error that belongs to a token other than the one being parsed when it was detected, such as an
+// unclosed '{' found at end of input. Line and Column are 0-based, like tokenizer.Token.
+type PosError struct {
+	Err          error
+	Line, Column int
+}
+
+func (e *PosError) Error() string { return e.Err.Error() }
+func (e *PosError) Unwrap() error { return e.Err }
+
+// errorAt attributes err to token t
+func errorAt(t tokenizer.Token, err error) error {
+	return &PosError{Err: err, Line: t.Line, Column: t.Column}
+}
+
 func unexpectedToken(c *ParseContext, t tokenizer.Token) error {
+	err := unexpectedTokenMsg(c, t)
+	switch {
+	case t.ID == tokenizer.EOF && c.state == stateChildren && len(c.braces) > 0:
+		// the block was opened long ago: point at its '{'
+		open := c.braces[len(c.braces)-1]
+		return errorAt(open, fmt.Errorf("unclosed child block: %w", err))
+	case c.state == stateProperty && c.ident.Valid() && t.ID != tokenizer.Equals:
+		// a v1 bare identifier that was not followed by '=': the identifier is the offender
+		return errorAt(c.ident, err)
+	}
+	return err
+}
+
+func unexpectedTokenMsg(c *ParseContext, t tokenizer.Token) error {
 	if t.ID == tokenizer.EOF {
 		return fmt.Errorf("unexpected end of input; expected %s", expectedInState(c))
 	}

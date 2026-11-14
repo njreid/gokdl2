@@ -16,7 +16,7 @@ func tokensAdjacent(prev, curr tokenizer.Token) bool {
 
 func isValueLikeToken(id tokenizer.TokenID) bool {
 	switch id {
-	case tokenizer.BareIdentifier, tokenizer.RawString, tokenizer.QuotedString,
+	case tokenizer.BareIdentifier, tokenizer.RawString, tokenizer.QuotedString, tokenizer.ExpressionString,
 		tokenizer.Decimal, tokenizer.Hexadecimal, tokenizer.Octal, tokenizer.Binary,
 		tokenizer.SuffixedDecimal, tokenizer.Boolean, tokenizer.Null, tokenizer.Keyword,
 		tokenizer.BraceClose:
@@ -33,9 +33,10 @@ func requiresV2Separation(prev, curr tokenizer.Token) bool {
 
 	if isValueLikeToken(prev.ID) {
 		switch curr.ID {
-		case tokenizer.BareIdentifier, tokenizer.RawString, tokenizer.QuotedString,
+		case tokenizer.BareIdentifier, tokenizer.RawString, tokenizer.QuotedString, tokenizer.ExpressionString,
 			tokenizer.Decimal, tokenizer.Hexadecimal, tokenizer.Octal, tokenizer.Binary,
-			tokenizer.SuffixedDecimal, tokenizer.Boolean, tokenizer.Null, tokenizer.Keyword:
+			tokenizer.SuffixedDecimal, tokenizer.Boolean, tokenizer.Null, tokenizer.Keyword,
+			tokenizer.ParensOpen:
 			return true
 		}
 	}
@@ -71,11 +72,7 @@ func (p *Parser) NewContext() *ParseContext {
 
 func (p *Parser) NewContextOptions(opts ParseContextOptions) *ParseContext {
 	doc := document.New()
-	var alloc *document.Allocator
-	if opts.InputSizeEstimate > 0 {
-		alloc = document.NewAllocator(opts.InputSizeEstimate / 25)
-		doc.Retain(alloc)
-	}
+	alloc := document.NewAllocator(opts.InputSizeEstimate / 25)
 	return &ParseContext{
 		doc:   doc,
 		alloc: alloc,
@@ -131,12 +128,12 @@ func (p *Parser) annotatedError(err error, t tokenizer.Token, context []tokenize
 // error on failure
 func (p *Parser) parse(c *ParseContext, token tokenizer.Token) error {
 	if c.opts.Version == tokenizer.VersionV2 {
-		recent := c.recent.Get()
-		if len(recent) >= 2 {
-			prev := recent[len(recent)-2]
-			if requiresV2Separation(prev, token) {
-				return missingSeparatorError(token)
-			}
+		// The current token was just added to the ring buffer, so the previous one sits just before head. Slots that
+		// have never been written have ID Unknown.
+		r := &c.recent
+		prev := &r.tokens[(r.head+recentTokensCount-1)%recentTokensCount]
+		if prev.ID != tokenizer.Unknown && requiresV2Separation(*prev, token) {
+			return missingSeparatorError(token)
 		}
 	}
 	if c.afterIgnoredChildBlock {
@@ -170,18 +167,7 @@ func (p *Parser) parse(c *ParseContext, token tokenizer.Token) error {
 		c.justContinuedLine = false
 	}
 
-	validTransitions := stateTransitions[c.state]
-
-	handler, ok := validTransitions[token.ID]
-	if !ok {
-		// if there's no handler for this token's specific ID, check for a handler for the class of token instead
-		tokenClasses := token.ID.Classes()
-		for _, tokenClass := range tokenClasses {
-			if handler, ok = validTransitions[tokenClass]; ok {
-				break
-			}
-		}
-	}
+	handler := lookupTransition(c.state, token.ID)
 
 	var err error
 	if handler == nil {
