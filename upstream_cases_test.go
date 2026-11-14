@@ -46,7 +46,7 @@ func rsSrc(where string) string  { return srcRS + where + rsRev }
 
 // upstreamCases is the table of ported cases.
 var upstreamCases = []upstreamCase{
-	// The kdl-org/kdl spec suite is vendored in kdl-org-v2/ (see kdl-org-v2/VENDORED.txt) and run by
+	// The kdl-org/kdl spec suite is vendored in kdl-org-v2/ (see kdl-org-v2/VENDORED.md) and run by
 	// kdl_test_suite_test.go; specSrc is kept for citing individual spec cases.
 
 	// ---- kdl-rs tests/test_cases (older copy of the suite, files absent upstream) ----
