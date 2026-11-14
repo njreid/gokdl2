@@ -16,7 +16,7 @@ func tokensAdjacent(prev, curr tokenizer.Token) bool {
 
 func isValueLikeToken(id tokenizer.TokenID) bool {
 	switch id {
-	case tokenizer.BareIdentifier, tokenizer.RawString, tokenizer.QuotedString,
+	case tokenizer.BareIdentifier, tokenizer.RawString, tokenizer.QuotedString, tokenizer.ExpressionString,
 		tokenizer.Decimal, tokenizer.Hexadecimal, tokenizer.Octal, tokenizer.Binary,
 		tokenizer.SuffixedDecimal, tokenizer.Boolean, tokenizer.Null, tokenizer.Keyword,
 		tokenizer.BraceClose:
@@ -33,7 +33,7 @@ func requiresV2Separation(prev, curr tokenizer.Token) bool {
 
 	if isValueLikeToken(prev.ID) {
 		switch curr.ID {
-		case tokenizer.BareIdentifier, tokenizer.RawString, tokenizer.QuotedString,
+		case tokenizer.BareIdentifier, tokenizer.RawString, tokenizer.QuotedString, tokenizer.ExpressionString,
 			tokenizer.Decimal, tokenizer.Hexadecimal, tokenizer.Octal, tokenizer.Binary,
 			tokenizer.SuffixedDecimal, tokenizer.Boolean, tokenizer.Null, tokenizer.Keyword,
 			tokenizer.ParensOpen:
