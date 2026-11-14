@@ -690,10 +690,6 @@ func TestKDLOrgTestCases(t *testing.T) {
 }
 
 func TestKDLOrgTestCasesV2(t *testing.T) {
-	if os.Getenv("KDL_RUN_V2_CASES") == "" {
-		t.Skip("set KDL_RUN_V2_CASES=1 to run the vendored official v2 suite")
-	}
-
 	testCases := loadTestCases(tokenizer.VersionV2)
 	runTestCases(t, testCases, 0)
 }

@@ -46,13 +46,8 @@ func rsSrc(where string) string  { return srcRS + where + rsRev }
 
 // upstreamCases is the table of ported cases.
 var upstreamCases = []upstreamCase{
-	// ---- kdl-org/kdl spec suite: cases not present in the vendored copy ----
-	{name: "multiline_string_only_1_quote", source: specSrc("input/multiline_string_only_1_quote.kdl"),
-		input: "node \"\"\"\n\"\n\"\"\"\n", valid: true, want: `node "\""`},
-	{name: "multiline_string_only_2_quotes", source: specSrc("input/multiline_string_only_2_quotes.kdl"),
-		input: "node \"\"\"\n\"\"\n\"\"\"\n", valid: true, want: `node "\"\""`},
-	{name: "just_space_in_arg_type_fail (updated)", source: specSrc("input/just_space_in_arg_type_fail.kdl"),
-		input: "node ( )#false\n", valid: false},
+	// The kdl-org/kdl spec suite is vendored in kdl-org-v2/ (see kdl-org-v2/VENDORED.txt) and run by
+	// kdl_test_suite_test.go; specSrc is kept for citing individual spec cases.
 
 	// ---- kdl-rs tests/test_cases (older copy of the suite, files absent upstream) ----
 	{name: "prop_ambiguous_number", source: rsSrc("tests/test_cases/input/prop_ambiguous_number.kdl"),

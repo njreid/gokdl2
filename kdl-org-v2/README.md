@@ -107,14 +107,16 @@ of some examples of KDL in the wild (either v1, v2, or both):
 |---|---|---|---|---|
 | C | [ckdl](https://github.com/tjol/ckdl) | ✅ | ✅ | |
 | C#/.NET | [Kadlet](https://github.com/oledfish/Kadlet) | ✅ | ✖️ | |
-| C#/.NET | [KadSharp](https://github.com/AndreyAkinshin/KdlSharp) | ✅ | ✅ | .NET Std: 2.1+, .NET 6+, .NET FW 4.7.2+, Mono, Xamarin |
+| C#/.NET | [KdlSharp](https://github.com/AndreyAkinshin/KdlSharp) | ✅ | ✅ | .NET Std: 2.1+, .NET 6+, .NET FW 4.7.2+, Mono, Xamarin |
 | C++ | [kdlpp](https://github.com/tjol/ckdl) | ✅ | ✅ | part of ckdl, requires C++20 |
 | Common Lisp | [kdlcl](https://github.com/chee/kdlcl) | ✅ | ✖️ | |
 | Crystal | [kdl-cr](https://github.com/danini-the-panini/kdl-cr) | ✅ | ✖️ | |
 | Dart | [kdl-dart](https://github.com/danini-the-panini/kdl-dart) | ✅ | ✅ | |
 | Elixir | [kuddle](https://github.com/IceDragon200/kuddle) | ✅ | ✅ | |
 | Go | [gokdl](https://github.com/lunjon/gokdl) | ✅ | ✖️ | |
-| Go | [kdl-go](https://github.com/njreid/gokdl2) | ✅ | ✖️ | |
+| Go | [kdl-go](https://github.com/sblinch/kdl-go) | ✅ | ✖️ | |
+| Go | [gokdl2](https://github.com/njreid/gokdl2) | ✅ | ✅ | Friendly errors & arena allocator |
+| Go | [kdly](https://codeberg.org/shimeoki/kdly) | ✖️ | ✅ | Format/comment-preserving parser |
 | Haskell | [Hustle](https://github.com/fuzzypixelz/Hustle) | ✅ | ✖️ | |
 | Haskell | [kdl-hs](https://github.com/brandonchinn178/kdl-hs) | ✅ | ✅ | Format/comment-preserving parser |
 | Java | [kdl4j](https://github.com/kdl-org/kdl4j) | ✅ | ✅ | |
@@ -154,6 +156,15 @@ entirety, but in the future, may be required to in order to be included here.
 * [Zed](https://zed.dev/extensions/kdl)
 
 \* Supports KDL 2.0.0
+
+## Tools
+
+| Tool | Application | v1 | v2 | Notes |
+|---|---|---|---|---|
+| Formatter | [kdlfmt](https://github.com/hougesen/kdlfmt) | ✅ | ✅ | |
+| Formatter | [kdl-fmt](https://github.com/dj95/kdl-fmt) | ✅ | ✅ | |
+| Formatter | [kdlf](https://codeberg.org/shimeoki/kdlf) | ✖️ | ✅ | |
+| Language Server | [kdl-lsp](https://github.com/kdl-org/kdl-rs) | ✅ | ✅ | Included in kdl-rs |
 
 ## Overview
 
