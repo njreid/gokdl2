@@ -146,10 +146,10 @@ func appendUnicodeEscape(b []byte, r rune) []byte {
 }
 
 // mustEscapeRune reports whether the non-ASCII rune r cannot appear literally in a KDL v2 string: newlines
-// (NEL, LS, PS), U+FFFD (the tokenizer rejects it as invalid UTF-8), the byte order mark and bidirectional control characters.
+// (NEL, LS, PS), the byte order mark and bidirectional control characters.
 func mustEscapeRune(r rune) bool {
 	switch {
-	case r == 0x85, r == 0x2028, r == 0x2029, r == 0xFEFF, r == 0xFFFD:
+	case r == 0x85, r == 0x2028, r == 0x2029, r == 0xFEFF:
 		return true
 	case r == 0x200E, r == 0x200F:
 		return true
@@ -263,7 +263,7 @@ func AppendUnquotedString(b []byte, s string, quote byte) ([]byte, error) {
 						if start < i {
 							b = append(b, s[start:i]...)
 						}
-						b = append(b, `\ufffd`...)
+						b = utf8.AppendRune(b, utf8.RuneError)
 						i += uint(size)
 						start = i
 						continue
@@ -845,7 +845,7 @@ func rawHashCount(s string, quote string, hashCount int, minHashes int) int {
 // canLiteralRune reports whether r can appear literally (that is, unescaped) in the body of a KDL v2 string.
 func canLiteralRune(r rune) bool {
 	switch {
-	case r == utf8.RuneError, mustEscapeRune(r):
+	case mustEscapeRune(r):
 		return false
 	case r < 0x20:
 		return r == '\t' || r == '\n'

@@ -92,7 +92,7 @@ func (s *Scanner) peekSize() (rune, int, error) {
 		if size == 0 {
 			return 0, 0, io.EOF
 		}
-		if c == utf8.RuneError {
+		if c == utf8.RuneError && size == 1 {
 			return 0, 0, ErrInvalidRune
 		}
 		s.peeked = s.peeked[0:1]
@@ -123,7 +123,7 @@ func (s *Scanner) peekTwoSize() (rune, int, rune, int, error) {
 		if size == 0 {
 			return 0, 0, 0, 0, io.EOF
 		}
-		if c == utf8.RuneError {
+		if c == utf8.RuneError && size == 1 {
 			return 0, 0, 0, 0, ErrInvalidRune
 		}
 		peekedSize += size
@@ -178,7 +178,7 @@ func (s *Scanner) peekAtSize(n int) (rune, int, error) {
 		if size == 0 {
 			return 0, 0, io.EOF
 		}
-		if c == utf8.RuneError {
+		if c == utf8.RuneError && size == 1 {
 			return 0, 0, ErrInvalidRune
 		}
 		peekedSize += size
@@ -208,7 +208,7 @@ func (s *Scanner) get() (rune, error) {
 		if size == 0 {
 			return 0, io.EOF
 		}
-		if c == utf8.RuneError {
+		if c == utf8.RuneError && size == 1 {
 			return 0, ErrInvalidRune
 		}
 	}

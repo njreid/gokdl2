@@ -140,7 +140,7 @@ func (s *Scanner) readQuotedStringFast(q byte) ([]byte, error) {
 
 		c, size := rune(in[i]), 1
 		if c >= utf8.RuneSelf {
-			if c, size = utf8.DecodeRune(in[i:]); c == utf8.RuneError {
+			if c, size = utf8.DecodeRune(in[i:]); c == utf8.RuneError && size == 1 {
 				err = ErrInvalidRune
 				break
 			}
@@ -198,7 +198,7 @@ func (s *Scanner) readQuotedStringFast(q byte) ([]byte, error) {
 
 	if done && i < len(in) && in[i] >= utf8.RuneSelf {
 		// the rune path peeks the rune after the closing quote and fails on invalid UTF-8
-		if c, _ := utf8.DecodeRune(in[i:]); c == utf8.RuneError {
+		if c, n := utf8.DecodeRune(in[i:]); c == utf8.RuneError && n == 1 {
 			err = ErrInvalidRune
 		}
 	}
