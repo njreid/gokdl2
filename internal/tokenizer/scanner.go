@@ -46,6 +46,17 @@ type Scanner struct {
 	r                     io.Reader
 	lastErr               error
 
+	// tokStart is the byte offset in raw at which the token most recently started by readNext begins; error
+	// positions are reported there (see errorPosition)
+	tokStart int
+	// prev describes the last token successfully returned by Scan/ScanAll: its ID, 0-based line/column, start offset
+	// and end offset
+	prev struct {
+		id               TokenID
+		line, col        int
+		startOff, endOff int
+	}
+
 	// identTable caches which ASCII bytes continue a bare identifier for the version and flags in identTableKey
 	identTable    [256]bool
 	identTableKey identTableKey
@@ -217,7 +228,7 @@ func (s *Scanner) get() (rune, error) {
 		// second half of a CRLF pair: the line break was already counted at the '\r'
 	} else if isNewline(c) {
 		s.line++
-		s.column = 1
+		s.column = 0
 	} else {
 		s.column++
 	}
@@ -525,6 +536,7 @@ func (s *Scanner) readNext() (Token, error) {
 	if s.Version == VersionAuto && !s.versionMarkerDetected {
 		s.detectVersion()
 	}
+	s.tokStart = s.Offset()
 	token := Token{
 		Line:    s.line,
 		Column:  s.column,
@@ -634,7 +646,7 @@ func (s *Scanner) readNext() (Token, error) {
 					return token, err
 				}
 			} else {
-				return token, fmt.Errorf("unexpected character %c", c)
+				return token, errUnexpectedSlash
 			}
 		}
 
@@ -923,10 +935,46 @@ func (s *Scanner) ExtractLineAtPosition(line, column int) string {
 	return s.extractLineAtOffset(offset)
 }
 
-// annotatedError annotates err with the input line/column and positionSummary from the input buffer
-func (s *Scanner) annotatedError(err error) error {
-	line, column := s.Pos()
-	return fmt.Errorf("scan failed: %w at line %d, column %d\n%s", err, line, column, s.extractLineAtOffset(len(s.raw)-len(s.input)))
+// errUnexpectedSlash is returned for a '/' that does not start a comment
+var errUnexpectedSlash = errors.New("unexpected character /")
+
+// preciseError marks a scan error that is reported at the scanner's position when it was raised rather than at the
+// start of the token being read. It is used for errors inside a string token (a bad escape, a newline in a v2
+// single-line string): pointing at the offending character is more helpful there than pointing at the opening quote.
+type preciseError struct{ error }
+
+func (e preciseError) Unwrap() error { return e.error }
+
+// errorPosition returns the 0-based line and column and the byte offset in raw at which err, returned by readNext for
+// tok, should be reported.
+//
+// The rule, matching kdl-rs, is to report the start of the offending token. The exceptions are errors that point at a
+// specific character: invalid UTF-8 (anywhere) and the preciseError cases inside strings; those are reported at the
+// current scan position, which is the offending character because the scanner does not consume it. An unterminated
+// string is reported at its opening quote like any other token-level error.
+func (s *Scanner) errorPosition(err error, tok Token) (line, column, offset int) {
+	var pe preciseError
+	if errors.As(err, &pe) || errors.Is(err, ErrInvalidRune) {
+		return s.line, s.column, s.Offset()
+	}
+	if errors.Is(err, errUnexpectedSlash) && s.prev.id == BareIdentifier && s.prev.endOff == s.tokStart {
+		// a '/' glued to the identifier before it: kdl-rs lexes the whole run as one malformed identifier
+		return s.prev.line, s.prev.col, s.prev.startOff
+	}
+	return tok.Line, tok.Column, s.tokStart
+}
+
+// annotatedError annotates err, returned by readNext for tok, with the input line/column and a source excerpt with a
+// caret; see errorPosition for where the error is reported
+func (s *Scanner) annotatedError(err error, tok Token) error {
+	line, column, offset := s.errorPosition(err, tok)
+	return fmt.Errorf("scan failed: %w at line %d, column %d\n%s", err, line+1, column+1, s.extractLineAtOffset(offset))
+}
+
+// noteToken records tok, just returned by readNext, as the previous token
+func (s *Scanner) noteToken(tok Token) {
+	s.prev.id, s.prev.line, s.prev.col = tok.ID, tok.Line, tok.Column
+	s.prev.startOff, s.prev.endOff = s.tokStart, s.Offset()
 }
 
 // SimpleLogger provides a simple logger that writes to stderr; this can be assigned to Scanner.Logger for debugging
@@ -1014,12 +1062,13 @@ func (s *Scanner) ScanAll() ([]Token, error) {
 	tokens := make([]Token, 0, len(s.input)/2)
 	for {
 		if token, err := s.readNext(); err == nil {
+			s.noteToken(token)
 			tokens = append(tokens, token)
 		} else if err == io.EOF {
 			break
 		} else {
 			s.log("failed", "error", err)
-			return nil, s.annotatedError(err)
+			return nil, s.annotatedError(err, token)
 		}
 	}
 
@@ -1047,6 +1096,7 @@ func (s *Scanner) Scan() bool {
 	}
 
 	if s.token, s.err = s.readNext(); s.err == nil {
+		s.noteToken(s.token)
 		return true
 	} else if s.err == io.EOF {
 		s.token = eofToken
@@ -1055,7 +1105,7 @@ func (s *Scanner) Scan() bool {
 		s.token.Version = s.Version
 		return true
 	} else {
-		s.err = s.annotatedError(s.err)
+		s.err = s.annotatedError(s.err, s.token)
 		return false
 	}
 }

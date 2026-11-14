@@ -24,15 +24,11 @@ type upstreamCase struct {
 	want   string
 	// errAt, if set, is a "line L, column C" substring the error must contain.
 	errAt string
-	// errAtKnownFailure, if set, skips only the errAt location check.
-	errAtKnownFailure string
 	// knownFailure, if set, records a gap: the case is skipped. The reason starts
 	// with a classification: (a) real gokdl2 bug, (b) upstream differs from the
 	// spec text, (c) intentional gokdl2 difference, (d) test-harness limitation.
 	knownFailure string
 }
-
-const errLocDiff = "(d) harness limitation: kdl-rs spans point at the start of the offending token; gokdl2 reports the position where scanning/parsing failed"
 
 const (
 	srcSpec = "kdl-org/kdl tests/test_cases/"
@@ -197,21 +193,21 @@ var upstreamCases = []upstreamCase{
 	{name: "bad_node_name child block as name", source: rsSrc("src/v2_parser.rs: failure_tests::bad_node_name_test"),
 		input: "foo { bar; { baz; }; }", valid: false, errAt: "line 1, column 12"},
 	{name: "bad_node_name slash in name", source: rsSrc("src/v2_parser.rs: failure_tests::bad_node_name_test"),
-		input: "no/de 1 {\n    1 2 foo\n    bad#\n}", valid: false, errAt: "line 1, column 1", errAtKnownFailure: errLocDiff},
+		input: "no/de 1 {\n    1 2 foo\n    bad#\n}", valid: false, errAt: "line 1, column 1"},
 	{name: "bad_entry_number 1asdf", source: rsSrc("src/v2_parser.rs: failure_tests::bad_entry_number_test"),
-		input: "node 1asdf 2", valid: false, errAt: "line 1, column 6", errAtKnownFailure: errLocDiff},
+		input: "node 1asdf 2", valid: false, errAt: "line 1, column 6"},
 	{name: "bad_entry_number 0x1asdf", source: rsSrc("src/v2_parser.rs: failure_tests::bad_entry_number_test"),
-		input: "node 0x1asdf 2", valid: false, errAt: "line 1, column 6", errAtKnownFailure: errLocDiff},
+		input: "node 0x1asdf 2", valid: false, errAt: "line 1, column 6"},
 	{name: "bad_entry_number 0o1asdf", source: rsSrc("src/v2_parser.rs: failure_tests::bad_entry_number_test"),
-		input: "node 0o1asdf 2", valid: false, errAt: "line 1, column 6", errAtKnownFailure: errLocDiff},
+		input: "node 0o1asdf 2", valid: false, errAt: "line 1, column 6"},
 	{name: "bad_entry_number 0b1asdf", source: rsSrc("src/v2_parser.rs: failure_tests::bad_entry_number_test"),
-		input: "node 0b1asdf 2", valid: false, errAt: "line 1, column 6", errAtKnownFailure: errLocDiff},
+		input: "node 0b1asdf 2", valid: false, errAt: "line 1, column 6"},
 	{name: "bad_entry_number 1.0asdf", source: rsSrc("src/v2_parser.rs: failure_tests::bad_entry_number_test"),
-		input: "node 1.0asdf 2", valid: false, errAt: "line 1, column 6", errAtKnownFailure: errLocDiff},
+		input: "node 1.0asdf 2", valid: false, errAt: "line 1, column 6"},
 	{name: "bad_entry_number 1.asdf", source: rsSrc("src/v2_parser.rs: failure_tests::bad_entry_number_test"),
-		input: "node 1.asdf 2", valid: false, errAt: "line 1, column 6", errAtKnownFailure: errLocDiff},
+		input: "node 1.asdf 2", valid: false, errAt: "line 1, column 6"},
 	{name: "bad_entry_number 1.0easdf", source: rsSrc("src/v2_parser.rs: failure_tests::bad_entry_number_test"),
-		input: "node 1.0easdf 2", valid: false, errAt: "line 1, column 6", errAtKnownFailure: errLocDiff},
+		input: "node 1.0easdf 2", valid: false, errAt: "line 1, column 6"},
 	{name: "bad_string unterminated", source: rsSrc("src/v2_parser.rs: failure_tests::bad_string_test"),
 		input: "node \" 1", valid: false},
 	{name: "bad_string junk after string", source: rsSrc("src/v2_parser.rs: failure_tests::bad_string_test"),
@@ -219,7 +215,7 @@ var upstreamCases = []upstreamCase{
 	{name: "bad_string newline in single-line string", source: rsSrc("src/v2_parser.rs: failure_tests::bad_string_test"),
 		input: "node \"\nlet's do multiline!\"", valid: false},
 	{name: "bad_child unclosed", source: rsSrc("src/v2_parser.rs: failure_tests::bad_child_test"),
-		input: "node {", valid: false, errAt: "line 1, column 6", errAtKnownFailure: errLocDiff},
+		input: "node {", valid: false, errAt: "line 1, column 6"},
 	{name: "bad_child extra close", source: rsSrc("src/v2_parser.rs: failure_tests::bad_child_test"),
 		input: "node {}}", valid: false, errAt: "line 1, column 8"},
 	{name: "bad_child close then open", source: rsSrc("src/v2_parser.rs: failure_tests::bad_child_test"),
@@ -284,11 +280,11 @@ var upstreamCases = []upstreamCase{
 	{name: "v1 node basic", source: rsSrc("src/v1_parser.rs: node_tests::basic"),
 		input: `foo 1 "bar"=false`, v1: true, valid: true, want: `foo i:1 bar=#false`},
 	{name: "v1 errant ident struct Vec", source: rsSrc("src/v1_parser.rs: node_tests::errant_ident1"),
-		input: "struct Vec { }", v1: true, valid: false, errAt: "line 1, column 8", errAtKnownFailure: errLocDiff},
+		input: "struct Vec { }", v1: true, valid: false, errAt: "line 1, column 8"},
 	{name: "v1 errant ident evil", source: rsSrc("src/v1_parser.rs: node_tests::errant_ident2"),
-		input: "\n    some_node\n    bad evil", v1: true, valid: false, errAt: "line 3, column 9", errAtKnownFailure: errLocDiff},
+		input: "\n    some_node\n    bad evil", v1: true, valid: false, errAt: "line 3, column 9"},
 	{name: "v1 errant ident wait", source: rsSrc("src/v1_parser.rs: node_tests::errant_ident3"),
-		input: `node "ok" wait "fine"`, v1: true, valid: false, errAt: "line 1, column 11", errAtKnownFailure: errLocDiff},
+		input: `node "ok" wait "fine"`, v1: true, valid: false, errAt: "line 1, column 11"},
 	{name: "v1 errant ident oof", source: rsSrc("src/v1_parser.rs: node_tests::errant_ident4"),
 		input: `node x="ok" oof z="5`, v1: true, valid: false},
 	{name: "v1 bare prop value", source: rsSrc("src/v1_parser.rs: node_tests::errant_ident5"),
@@ -349,9 +345,7 @@ func TestUpstreamCases(t *testing.T) {
 					t.Fatalf("expected parse error, got none (source: %s)\ninput: %q\ngot: %s", tc.source, tc.input, dumpUpstreamDoc(doc))
 				}
 				if tc.errAt != "" {
-					if tc.errAtKnownFailure != "" {
-						t.Logf("error location check skipped: %s (source: %s); gokdl2 error: %q", tc.errAtKnownFailure, tc.source, err.Error())
-					} else if !strings.Contains(err.Error(), tc.errAt) {
+					if !strings.Contains(err.Error(), tc.errAt) {
 						t.Fatalf("error %q does not contain location %q (source: %s)", err.Error(), tc.errAt, tc.source)
 					}
 				}

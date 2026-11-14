@@ -153,7 +153,7 @@ func (s *Scanner) readQuotedStringFast(q byte) ([]byte, error) {
 			switch c {
 			case '\\':
 				if v2 && !escaped && i+size < len(in) && in[i+size] == '/' {
-					err = fmt.Errorf("unexpected character %c", '/')
+					err = preciseError{fmt.Errorf("unexpected character %c", '/')}
 				}
 				escaped = !escaped
 			case rune(q):
@@ -170,7 +170,7 @@ func (s *Scanner) readQuotedStringFast(q byte) ([]byte, error) {
 			case '\n', '\r':
 				if v2 {
 					if !escaped {
-						err = errUnexpectedNewlineInString
+						err = preciseError{errUnexpectedNewlineInString}
 					} else {
 						escaped = false
 						folding = true
@@ -189,7 +189,7 @@ func (s *Scanner) readQuotedStringFast(q byte) ([]byte, error) {
 			// second half of a CRLF pair
 		} else if isNewline(c) {
 			line++
-			col = 1
+			col = 0
 		} else {
 			col++
 		}

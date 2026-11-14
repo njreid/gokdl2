@@ -12,9 +12,9 @@ func TestQuotedStringErrors(t *testing.T) {
 		want     string
 	}{
 		{"newline v2", "node \"ab\ncd\"\n", ParseVersionV2, "unexpected newline in string at line 1, column 9"},
-		{"newline in children v2", "node {\n  a \"x\ny\"\n}", ParseVersionV2, "unexpected newline in string at line 2, column 8"},
-		{"unterminated v2", "node \"abc", ParseVersionV2, "unterminated string at line 1, column 10"},
-		{"unterminated v1", "node \"abc", ParseVersionV1, "unterminated string at line 1, column 10"},
+		{"newline in children v2", "node {\n  a \"x\ny\"\n}", ParseVersionV2, "unexpected newline in string at line 2, column 7"},
+		{"unterminated v2", "node \"abc", ParseVersionV2, "unterminated string at line 1, column 6"},
+		{"unterminated v1", "node \"abc", ParseVersionV1, "unterminated string at line 1, column 6"},
 		{"escaped slash v2", "node \"a\\/b\"", ParseVersionV2, "unexpected character / at line 1, column 8"},
 	}
 	for _, tt := range tests {

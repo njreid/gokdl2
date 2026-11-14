@@ -36,6 +36,8 @@ type ParseContext struct {
 	doc *document.Document
 	// state stack; current state is pushed onto this when a child block is encountered
 	states []parserState
+	// open child-block braces, innermost last; used to report an unclosed block at its opening brace
+	braces []tokenizer.Token
 	// current state
 	state parserState
 	// node stack; new nodes are pushed onto this when a child block is encountered; current node is last
@@ -135,7 +137,7 @@ func (c *ParseContext) newValue() *document.Value {
 func (c *ParseContext) setNodeNameToken(n *document.Node, t tokenizer.Token) error {
 	v := c.newValue()
 	if err := document.ValueFromTokenInto(v, t); err != nil {
-		return err
+		return errorAt(t, err)
 	}
 	n.SetNameValue(v)
 	return nil
@@ -144,7 +146,7 @@ func (c *ParseContext) setNodeNameToken(n *document.Node, t tokenizer.Token) err
 func (c *ParseContext) addArgumentToken(n *document.Node, t tokenizer.Token, typeAnnot tokenizer.Token) error {
 	v := c.newValue()
 	if err := document.ValueFromTokenInto(v, t); err != nil {
-		return err
+		return errorAt(t, err)
 	}
 	if typeAnnot.Valid() {
 		ta, err := document.TypeAnnotationFromToken(typeAnnot)
@@ -161,11 +163,11 @@ func (c *ParseContext) addArgumentToken(n *document.Node, t tokenizer.Token, typ
 func (c *ParseContext) addPropertyToken(n *document.Node, name tokenizer.Token, value tokenizer.Token, typeAnnot tokenizer.Token) (*document.Value, error) {
 	nt := c.newValue()
 	if err := document.ValueFromTokenInto(nt, name); err != nil {
-		return nil, err
+		return nil, errorAt(name, err)
 	}
 	vt := c.newValue()
 	if err := document.ValueFromTokenInto(vt, value); err != nil {
-		return nil, err
+		return nil, errorAt(value, err)
 	}
 	if typeAnnot.Valid() {
 		ta, err := document.TypeAnnotationFromToken(typeAnnot)
@@ -210,6 +212,12 @@ func (c *ParseContext) pushState(newState parserState) {
 	c.state = newState
 }
 
+// pushChildren enters a child block opened by the '{' token open
+func (c *ParseContext) pushChildren(open tokenizer.Token) {
+	c.braces = append(c.braces, open)
+	c.pushState(stateChildren)
+}
+
 func (c *ParseContext) startContinuation() {
 	c.continuation = true
 	c.continuationNewlineSeen = false
@@ -230,6 +238,9 @@ var errStateStackEmpty = errors.New("state stack empty")
 func (c *ParseContext) popState() (parserState, error) {
 	if len(c.states) == 0 {
 		return c.state, errStateStackEmpty
+	}
+	if c.state == stateChildren && len(c.braces) > 0 {
+		c.braces = c.braces[:len(c.braces)-1]
 	}
 	c.state = c.states[len(c.states)-1]
 	c.states = c.states[0 : len(c.states)-1]

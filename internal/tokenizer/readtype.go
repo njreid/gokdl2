@@ -253,7 +253,7 @@ func (s *Scanner) readQuotedStringQ(q rune) ([]byte, error) {
 			if s.Version == VersionV2 && !escaped {
 				next, perr := s.peekAt(1)
 				if perr == nil && next == '/' {
-					closureErr = fmt.Errorf("unexpected character %c", next)
+					closureErr = preciseError{fmt.Errorf("unexpected character %c", next)}
 					return false
 				}
 			}
@@ -274,7 +274,7 @@ func (s *Scanner) readQuotedStringQ(q rune) ([]byte, error) {
 				break
 			}
 			if !escaped {
-				closureErr = fmt.Errorf("unexpected newline in string")
+				closureErr = preciseError{errUnexpectedNewlineInString}
 				return false
 			}
 			escaped = false

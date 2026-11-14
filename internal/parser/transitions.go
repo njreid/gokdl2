@@ -282,7 +282,7 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 				c.ignoreNextNode = false
 				c.ignoreChildren++
 			}
-			c.pushState(stateChildren)
+			c.pushChildren(t)
 			return nil
 		},
 		tokenizer.Continuation: func(c *ParseContext, t tokenizer.Token) error {
@@ -407,7 +407,7 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 				c.ignoreNextArgProp = false
 				c.ignoreChildren++
 			}
-			c.pushState(stateChildren)
+			c.pushChildren(t)
 			return nil
 		},
 		tokenizer.ClassTerminator: func(c *ParseContext, t tokenizer.Token) error {
@@ -514,7 +514,7 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 				c.ignoreChildren++
 			}
 
-			c.pushState(stateChildren)
+			c.pushChildren(t)
 			return nil
 		},
 		tokenizer.Equals: func(c *ParseContext, t tokenizer.Token) error {

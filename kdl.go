@@ -1,6 +1,7 @@
 package kdl
 
 import (
+	"errors"
 	"fmt"
 	"io"
 
@@ -114,7 +115,14 @@ func parseOne(s *tokenizer.Scanner, inputSizeEstimate int) (*document.Document, 
 			if err == parser.ErrReenterState {
 				continue
 			}
-			return nil, fmt.Errorf("parse failed: %w at line %d, column %d\n%s", err, tok.Line+1, tok.Column+1, s.ExtractLineAtPosition(tok.Line+1, tok.Column+1))
+			// an error caused by an earlier pending token (an unclosed '{', a bare identifier awaiting '=') carries that
+			// token's position; otherwise the offending token is the current one
+			at := tok
+			var pe *parser.PosError
+			if errors.As(err, &pe) {
+				at.Line, at.Column = pe.Line, pe.Column
+			}
+			return nil, fmt.Errorf("parse failed: %w at line %d, column %d\n%s", err, at.Line+1, at.Column+1, s.ExtractLineAtPosition(at.Line+1, at.Column+1))
 		}
 	}
 	if s.Err() != nil {
