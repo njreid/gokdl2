@@ -1,3 +1,3 @@
 module github.com/njreid/gokdl2
 
-go 1.19
+go 1.22

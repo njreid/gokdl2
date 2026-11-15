@@ -44,6 +44,9 @@ func QuoteString(s string) string {
 // AppendQuotedString is based on the JSON string quoting function from the MIT-Licensed ZeroLog, Copyright (c) 2017
 // Olivier Poitrey, but has been heavily modified to improve performance and use KDL string escapes instead of JSON.
 func AppendQuotedString(b []byte, s string, quote byte) []byte {
+	if quote != '"' {
+		return appendQuotedStringGeneric(b, s, quote)
+	}
 	b = append(b, quote)
 
 	// use uints for bounds-check elimination
@@ -74,7 +77,16 @@ func AppendQuotedString(b []byte, s string, quote byte) []byte {
 						if start < i {
 							b = append(b, s[start:i]...)
 						}
-						b = append(b, `\ufffd`...)
+						b = append(b, `\u{fffd}`...)
+						i += uint(size)
+						start = i
+						continue
+					}
+					if mustEscapeRune(r) {
+						if start < i {
+							b = append(b, s[start:i]...)
+						}
+						b = appendUnicodeEscape(b, r)
 						i += uint(size)
 						start = i
 						continue
@@ -105,8 +117,7 @@ func AppendQuotedString(b []byte, s string, quote byte) []byte {
 				case '\f':
 					b = append(b, '\\', 'f')
 				default:
-					b = append(b, '\\', 'u')
-					b = strconv.AppendUint(b, uint64(c), 16)
+					b = appendUnicodeEscape(b, rune(c))
 				}
 				i++
 				start = i
@@ -125,6 +136,72 @@ func AppendQuotedString(b []byte, s string, quote byte) []byte {
 	b = append(b, quote)
 
 	return b
+}
+
+// appendUnicodeEscape appends r as a KDL unicode escape, \u{...}.
+func appendUnicodeEscape(b []byte, r rune) []byte {
+	b = append(b, '\\', 'u', '{')
+	b = strconv.AppendUint(b, uint64(r), 16)
+	return append(b, '}')
+}
+
+// mustEscapeRune reports whether the non-ASCII rune r cannot appear literally in a KDL v2 string: newlines
+// (NEL, LS, PS), the byte order mark and bidirectional control characters.
+func mustEscapeRune(r rune) bool {
+	switch {
+	case r == 0x85, r == 0x2028, r == 0x2029, r == 0xFEFF:
+		return true
+	case r == 0x200E, r == 0x200F:
+		return true
+	case r >= 0x202A && r <= 0x202E:
+		return true
+	case r >= 0x2066 && r <= 0x2069:
+		return true
+	}
+	return false
+}
+
+// appendQuotedStringGeneric is the slower general form of AppendQuotedString that supports any quote character (for
+// example '`' for expression strings). Only the quote character, backslash and characters that cannot appear
+// literally are escaped.
+func appendQuotedStringGeneric(b []byte, s string, quote byte) []byte {
+	b = append(b, quote)
+	for i := 0; i < len(s); {
+		c := s[i]
+		if c >= utf8.RuneSelf {
+			r, size := utf8.DecodeRuneInString(s[i:])
+			if (r == utf8.RuneError && size == 1) || mustEscapeRune(r) {
+				if r == utf8.RuneError && size == 1 {
+					r = utf8.RuneError
+				}
+				b = appendUnicodeEscape(b, r)
+			} else {
+				b = append(b, s[i:i+size]...)
+			}
+			i += size
+			continue
+		}
+		switch {
+		case c == quote, c == '\\':
+			b = append(b, '\\', c)
+		case c == '\n':
+			b = append(b, '\\', 'n')
+		case c == '\r':
+			b = append(b, '\\', 'r')
+		case c == '\t':
+			b = append(b, '\\', 't')
+		case c == '\b':
+			b = append(b, '\\', 'b')
+		case c == '\f':
+			b = append(b, '\\', 'f')
+		case c < 0x20 || c == 0x7f:
+			b = appendUnicodeEscape(b, rune(c))
+		default:
+			b = append(b, c)
+		}
+		i++
+	}
+	return append(b, quote)
 }
 
 const empty = ""
@@ -186,7 +263,7 @@ func AppendUnquotedString(b []byte, s string, quote byte) ([]byte, error) {
 						if start < i {
 							b = append(b, s[start:i]...)
 						}
-						b = append(b, `\ufffd`...)
+						b = utf8.AppendRune(b, utf8.RuneError)
 						i += uint(size)
 						start = i
 						continue
@@ -257,7 +334,7 @@ func AppendUnquotedString(b []byte, s string, quote byte) ([]byte, error) {
 					if i >= lenS {
 						return b, ErrInvalid
 					}
-					if i-rstart > 6 {
+					if i-rstart > 6 || !allHexDigits(s[rstart:i]) {
 						return b, ErrInvalid
 					}
 
@@ -312,24 +389,10 @@ func rawString(s string) string {
 }
 
 // AppendRawString appends s, quoted for use as a KDL v1 RawString (r#"..."#), to b and returns the expanded buffer.
-// If hashCount is -1, the minimum number of hashes required to quote s will be used.
+// If hashCount is -1, the minimum number of hashes required to quote s will be used. If hashCount is too small for s
+// to be quoted, it is increased.
 func AppendRawString(b []byte, s string, hashCount int) []byte {
-	if hashCount < 0 {
-		hashes := append(make([]byte, 0, 64), '#')
-		ok := false
-		for i := 0; i < cap(hashes); i++ {
-			terminator := `"` + string(hashes)
-			if !strings.Contains(s, terminator) {
-				ok = true
-				break
-			}
-			hashes = append(hashes, '#')
-		}
-		if !ok {
-			return append(b, "r\"invalid\""...)
-		}
-		hashCount = len(hashes) - 1
-	}
+	hashCount = rawHashCount(s, `"`, hashCount, 0)
 
 	minSpace := 1 + hashCount + 1 + len(s) + 1 + hashCount
 	if cap(b)-len(b) < minSpace {
@@ -351,24 +414,11 @@ func AppendRawString(b []byte, s string, hashCount int) []byte {
 }
 
 // AppendRawStringV2 appends s, quoted for use as a KDL v2 RawString (#"..."#), to b and returns the expanded buffer.
-// If hashCount is -1, the minimum number of hashes required to quote s will be used.
+// If hashCount is -1, the minimum number of hashes required to quote s will be used (at least 1). If hashCount is
+// too small for s to be quoted, it is increased. The caller must make sure that s can be raw at all; see canRawString.
 func AppendRawStringV2(b []byte, s string, hashCount int) []byte {
-	if hashCount < 0 {
-		hashes := append(make([]byte, 0, 64), '#')
-		ok := false
-		for i := 0; i < cap(hashes); i++ {
-			terminator := `"` + string(hashes)
-			if !strings.Contains(s, terminator) {
-				ok = true
-				break
-			}
-			hashes = append(hashes, '#')
-		}
-		if !ok {
-			return append(b, "\"invalid\""...)
-		}
-		hashCount = len(hashes) - 1
-	}
+	// a v2 raw string needs at least one hash: without one, the result would be an ordinary quoted string
+	hashCount = rawHashCount(s, `"`, hashCount, 1)
 
 	minSpace := hashCount + 1 + len(s) + 1 + hashCount
 	if cap(b)-len(b) < minSpace {
@@ -437,7 +487,8 @@ func unquoteMultiLineToken(s string, delim string, quote byte, allowRaw bool) (s
 	}
 	inner = inner[openingLineEnd+openingNewlineLen:]
 
-	content, indent, closingEscaped, err := parseMultilineTail(inner)
+	// raw strings have no escapes, so a trailing backslash line is content, not an escaped closing line
+	content, indent, closingEscaped, err := parseMultilineTail(inner, hashCount == 0)
 	if err != nil {
 		return "", 0, err
 	}
@@ -473,10 +524,16 @@ func parseMultilineClosingEscape(s string) (int, bool) {
 	return 0, false
 }
 
-func parseMultilineTail(inner string) (content string, indent string, closingEscaped bool, err error) {
+func parseMultilineTail(inner string, allowEscape bool) (content string, indent string, closingEscaped bool, err error) {
+	closingEscape := func(line string) (int, bool) {
+		if !allowEscape {
+			return 0, false
+		}
+		return parseMultilineClosingEscape(line)
+	}
 	closingLineStart, closingNewlineLen := lastNewline(inner)
 	if closingLineStart == -1 {
-		if idx, ok := parseMultilineClosingEscape(inner); ok {
+		if idx, ok := closingEscape(inner); ok {
 			return "", inner[:idx], true, nil
 		}
 		return "", inner, false, nil
@@ -484,7 +541,7 @@ func parseMultilineTail(inner string) (content string, indent string, closingEsc
 
 	closingLine := inner[closingLineStart+closingNewlineLen:]
 	prefix := inner[:closingLineStart]
-	if idx, ok := parseMultilineClosingEscape(closingLine); ok {
+	if idx, ok := closingEscape(closingLine); ok {
 		return prefix, closingLine[:idx], true, nil
 	}
 	if !isInlineWhitespaceOnly(closingLine) {
@@ -498,7 +555,7 @@ func parseMultilineTail(inner string) (content string, indent string, closingEsc
 		prevLine = prefix[prevLineStart+prevNewlineLen:]
 		prevPrefix = prefix[:prevLineStart]
 	}
-	if idx, ok := parseMultilineClosingEscape(prevLine); ok {
+	if idx, ok := closingEscape(prevLine); ok {
 		return prevPrefix, prevLine[:idx], true, nil
 	}
 	return prefix, closingLine, false, nil
@@ -660,7 +717,7 @@ func appendUnquotedMultilineContent(b []byte, s string, quote byte, allowTrailin
 			for j < len(s) && s[j] != '}' {
 				j++
 			}
-			if j >= len(s) || j-start > 6 {
+			if j >= len(s) || j-start > 6 || !allHexDigits(s[start:j]) {
 				return b, ErrInvalid
 			}
 			rn := rune(0)
@@ -690,28 +747,37 @@ func AppendMultiLineString(b []byte, s string) []byte {
 
 // AppendMultiLineExpressionString appends s, quoted for use as a triple-backtick multi-line expression string.
 func AppendMultiLineExpressionString(b []byte, s string) []byte {
-	b = appendMultiLineQuotedString(b, s, '`', "```")
-	if len(s) > 0 && s[len(s)-1] != '\n' {
-		b = append(b[:len(b)-3], '\n')
-		b = append(b, '`', '`', '`')
-	}
-	return b
+	return appendMultiLineQuotedString(b, s, '`', "```")
 }
 
+// appendMultiLineQuotedString appends s as a multi-line string delimited by delim. The opening delimiter and the
+// closing delimiter are each on a line of their own, and the closing delimiter is not indented, so no content is
+// dedented when the result is parsed.
 func appendMultiLineQuotedString(b []byte, s string, quote byte, delim string) []byte {
 	b = append(b, delim...)
 	b = append(b, '\n')
 
-	lines := strings.Split(s, "\n")
-	for i, line := range lines {
+	if s != "" {
 		var lineBuf []byte
-		lineBuf = AppendQuotedString(lineBuf, line, quote)
-		if len(lineBuf) >= 2 {
+		for i, line := range strings.Split(s, "\n") {
+			if i > 0 {
+				b = append(b, '\n')
+			}
+			if line != "" && strings.TrimSpace(line) == "" {
+				// whitespace-only lines are treated as empty when dedenting, so escape the whitespace to keep it
+				for _, r := range line {
+					if r == ' ' {
+						b = append(b, '\\', 's')
+					} else {
+						b = appendUnicodeEscape(b, r)
+					}
+				}
+				continue
+			}
+			lineBuf = AppendQuotedString(lineBuf[:0], line, quote)
 			b = append(b, lineBuf[1:len(lineBuf)-1]...)
 		}
-		if i < len(lines)-1 {
-			b = append(b, '\n')
-		}
+		b = append(b, '\n')
 	}
 
 	b = append(b, delim...)
@@ -719,27 +785,11 @@ func appendMultiLineQuotedString(b []byte, s string, quote byte, delim string) [
 }
 
 // AppendMultiLineStringV2 appends s, quoted for use as a KDL v2 raw triple-quoted string (#"""..."""#), to b and returns the expanded buffer.
-// If hashCount is -1, it will use the minimum hashes required (at least 1).
+// If hashCount is -1, it will use the minimum hashes required (at least 1). If hashCount is too small for s to be
+// quoted, it is increased. The caller must make sure that s can be written raw at all; see canRawMultiLine.
 func AppendMultiLineStringV2(b []byte, s string, hashCount int) []byte {
-	if hashCount < 0 {
-		hashes := append(make([]byte, 0, 64), '#')
-		ok := false
-		for i := 0; i < cap(hashes); i++ {
-			terminator := `"""` + string(hashes)
-			if !strings.Contains(s, terminator) {
-				ok = true
-				break
-			}
-			hashes = append(hashes, '#')
-		}
-		if !ok {
-			return append(b, "\"\"\"invalid\"\"\""...)
-		}
-		hashCount = len(hashes)
-	}
-	if hashCount == 0 {
-		hashCount = 1
-	}
+	hashCount = rawHashCount(s, `"""`, hashCount, 1)
+
 	minSpace := hashCount + 3 + 1 + len(s) + 3 + hashCount
 	if cap(b)-len(b) < minSpace {
 		n := make([]byte, 0, len(b)+minSpace)
@@ -750,8 +800,8 @@ func AppendMultiLineStringV2(b []byte, s string, hashCount int) []byte {
 		b = append(b, '#')
 	}
 	b = append(b, '"', '"', '"', '\n')
-	b = append(b, s...)
-	if len(s) > 0 && s[len(s)-1] != '\n' {
+	if s != "" {
+		b = append(b, s...)
 		b = append(b, '\n')
 	}
 	b = append(b, '"', '"', '"')
@@ -759,4 +809,118 @@ func AppendMultiLineStringV2(b []byte, s string, hashCount int) []byte {
 		b = append(b, '#')
 	}
 	return b
+}
+
+// rawHashCount returns the number of '#' characters needed to delimit s as a raw string whose delimiter is quote
+// (`"` for single-line and `"""` for multi-line strings): one more than the longest run of hashes that follows an
+// occurrence of quote in s, so that the closing delimiter cannot appear in s. The result is at least hashCount and
+// at least minHashes.
+func rawHashCount(s string, quote string, hashCount int, minHashes int) int {
+	need := 0
+	for i := 0; i < len(s); {
+		j := strings.Index(s[i:], quote)
+		if j < 0 {
+			break
+		}
+		end := i + j + len(quote)
+		run := 0
+		for end+run < len(s) && s[end+run] == '#' {
+			run++
+		}
+		if run+1 > need {
+			need = run + 1
+		}
+		// occurrences may overlap (for example `""""`), so only step past the first character of this one
+		i += j + 1
+	}
+	if hashCount < need {
+		hashCount = need
+	}
+	if hashCount < minHashes {
+		hashCount = minHashes
+	}
+	return hashCount
+}
+
+// canLiteralRune reports whether r can appear literally (that is, unescaped) in the body of a KDL v2 string.
+func canLiteralRune(r rune) bool {
+	switch {
+	case mustEscapeRune(r):
+		return false
+	case r < 0x20:
+		return r == '\t' || r == '\n'
+	case r == 0x7f:
+		return false
+	}
+	return true
+}
+
+// isKDLNewline reports whether r is a KDL v2 newline character.
+func isKDLNewline(r rune) bool {
+	switch r {
+	case '\n', '\r', '\v', '\f', 0x85, 0x2028, 0x2029:
+		return true
+	}
+	return false
+}
+
+// canRawString reports whether s can be written as a single-line KDL v2 raw string (#"..."#) that parses back to
+// exactly s. Raw strings have no escapes, so s must be valid UTF-8, must not contain a newline, and must not
+// contain any disallowed literal code point, and must not start with a quote, which would make the opening look
+// like that of a multi-line string. (Any number of hashes can delimit a string containing quotes.)
+func canRawString(s string) bool {
+	// `#"` followed by a quote would read as the start of a multi-line string
+	if !utf8.ValidString(s) || strings.HasPrefix(s, `"`) {
+		return false
+	}
+	for _, r := range s {
+		if !canLiteralRune(r) || isKDLNewline(r) {
+			return false
+		}
+	}
+	return true
+}
+
+// canRawMultiLine reports whether s can be written as a KDL v2 raw multi-line string (#"""..."""#) that parses back
+// to exactly s. The generator writes such a string with unindented content lines and the closing delimiter at the
+// start of its line, so no indentation is stripped. The rules, from the spec's multi-line string rules and the
+// parser (unquoteMultiLineToken and dedentMultilineContent), are:
+//
+//   - s must be valid UTF-8 and contain no disallowed literal code point; raw strings have no escapes to
+//     represent them.
+//   - s must not contain a newline other than LF. A literal CR or CRLF is normalised to LF, and VT, FF, NEL, LS
+//     and PS are not accepted as part of the string body.
+//   - no line may be non-empty and made up only of whitespace: such lines are normalised to empty lines. This
+//     includes a final line that is only whitespace.
+//
+// Hashes never prevent raw representation, since the number of hashes is chosen so that s contains no `"""`
+// followed by that many hashes. A leading or trailing LF, and the empty string, are representable.
+func canRawMultiLine(s string) bool {
+	if !utf8.ValidString(s) {
+		return false
+	}
+	for _, r := range s {
+		if !canLiteralRune(r) || (isKDLNewline(r) && r != '\n') {
+			return false
+		}
+	}
+	for _, line := range strings.Split(s, "\n") {
+		if line != "" && strings.TrimSpace(line) == "" {
+			return false
+		}
+	}
+	return true
+}
+
+// canLiteralString reports whether every character of s can appear literally in a KDL v2 string or identifier.
+func canLiteralString(s string) bool {
+	if !utf8.ValidString(s) {
+		return false
+	}
+	for _, r := range s {
+		if !canLiteralRune(r) {
+			return false
+		}
+	}
+	return true
 }

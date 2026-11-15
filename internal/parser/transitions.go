@@ -13,7 +13,7 @@ type stateTransitionFunc func(*ParseContext, tokenizer.Token) error
 // stateTransitions maps a given parser state to the tokens allowed in that state, and provides a transition function
 // that accepts a token and a context, processes the token, and updates the parser state
 //
-// TODO: benchmark this; it's likely faster (though likely much less readable) to do this using switch statements
+// This map is the readable source of truth; init flattens it into dispatch for the hot path.
 var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc{
 	stateDocument: {
 		tokenizer.Whitespace: func(c *ParseContext, t tokenizer.Token) error {
@@ -47,7 +47,12 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 				}
 			}
 			if c.typeAnnot.Valid() {
-				node.Type = document.TypeAnnotation(c.typeAnnot.Data)
+				ta, err := document.TypeAnnotationFromToken(c.typeAnnot)
+				if err != nil {
+					return err
+				}
+				node.Type = ta
+				node.EmptyType = ta == ""
 				c.typeAnnot.Clear()
 			}
 			c.pushState(stateNode)
@@ -153,7 +158,12 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 				}
 			}
 			if c.typeAnnot.Valid() {
-				node.Type = document.TypeAnnotation(c.typeAnnot.Data)
+				ta, err := document.TypeAnnotationFromToken(c.typeAnnot)
+				if err != nil {
+					return err
+				}
+				node.Type = ta
+				node.EmptyType = ta == ""
 				c.typeAnnot.Clear()
 			}
 			c.pushState(stateNode)
@@ -272,7 +282,7 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 				c.ignoreNextNode = false
 				c.ignoreChildren++
 			}
-			c.pushState(stateChildren)
+			c.pushChildren(t)
 			return nil
 		},
 		tokenizer.Continuation: func(c *ParseContext, t tokenizer.Token) error {
@@ -336,7 +346,10 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			return nil
 		},
 		tokenizer.ParensOpen: func(c *ParseContext, t tokenizer.Token) error {
-			// a ( inside a node declaration is hte beginning of a type annotation for a node
+			// a ( inside a node declaration is the beginning of a type annotation for a value; only one is allowed
+			if c.typeAnnot.Valid() {
+				return unexpectedToken(c, t)
+			}
 			c.pushState(stateTypeAnnot)
 			return nil
 		},
@@ -386,17 +399,6 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			c.ident = t
 			c.state = stateArgProp
 			return nil
-
-			// a numeric value inside a node declaration is always an argument
-			if c.ignoreNextArgProp {
-				c.ignoreNextArgProp = false
-			} else if err := c.addArgumentToken(c.currentNode(), t, c.typeAnnot); err != nil {
-				return err
-			}
-
-			c.typeAnnot.Clear()
-			c.ident.Clear()
-			return nil
 		},
 		tokenizer.BraceOpen: func(c *ParseContext, t tokenizer.Token) error {
 			if c.ignoreNextArgProp || c.ignoreChildren > 0 {
@@ -405,7 +407,7 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 				c.ignoreNextArgProp = false
 				c.ignoreChildren++
 			}
-			c.pushState(stateChildren)
+			c.pushChildren(t)
 			return nil
 		},
 		tokenizer.ClassTerminator: func(c *ParseContext, t tokenizer.Token) error {
@@ -451,14 +453,28 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			return nil
 		},
 		tokenizer.BraceClose: func(c *ParseContext, t tokenizer.Token) error {
-			_, _, err := c.popNodeAndState()
-			if err != nil {
-				return err
-			}
-			return ErrReenterState
+			// a property name without '=' and a value is incomplete
+			return unexpectedToken(c, t)
 		},
 	},
 	stateArgProp: {
+		tokenizer.ParensOpen: func(c *ParseContext, t tokenizer.Token) error {
+			// in v2, whitespace after a value doesn't end the arg/prop decision (a '=' may follow); a '(' starts the
+			// type annotation of the next value, so the pending value was an argument
+			if !c.ident.Valid() {
+				return unexpectedToken(c, t)
+			}
+			if c.ignoreNextArgProp {
+				c.ignoreNextArgProp = false
+			} else if err := c.addArgumentToken(c.currentNode(), c.ident, c.typeAnnot); err != nil {
+				return err
+			}
+			c.typeAnnot.Clear()
+			c.ident.Clear()
+			c.state = stateNodeParams
+			c.pushState(stateTypeAnnot)
+			return nil
+		},
 		tokenizer.TokenComment: func(c *ParseContext, t tokenizer.Token) error {
 			if c.ignoreNextArgProp {
 				c.ignoreNextArgProp = false
@@ -498,7 +514,7 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 				c.ignoreChildren++
 			}
 
-			c.pushState(stateChildren)
+			c.pushChildren(t)
 			return nil
 		},
 		tokenizer.Equals: func(c *ParseContext, t tokenizer.Token) error {
@@ -535,7 +551,17 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			if c.opts.Version == tokenizer.VersionV2 {
 				return nil
 			}
-			return unexpectedToken(c, t)
+			// in v1 a comment directly after a value ends the argument, as whitespace does; the comment itself is then
+			// handled by stateNodeParams (a single-line comment also ends the node there)
+			if c.ignoreNextArgProp {
+				c.ignoreNextArgProp = false
+			} else if err := c.addArgumentToken(c.currentNode(), c.ident, c.typeAnnot); err != nil {
+				return err
+			}
+			c.typeAnnot.Clear()
+			c.ident.Clear()
+			c.state = stateNodeParams
+			return ErrReenterState
 		},
 
 		tokenizer.Continuation: func(c *ParseContext, t tokenizer.Token) error {
@@ -621,6 +647,12 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			return nil
 		},
 		tokenizer.ClassValue: func(c *ParseContext, t tokenizer.Token) error {
+			// KDL v1 values are strings, numbers, booleans and null; a bare identifier is only a value in v2 or in
+			// relaxed NGINX mode
+			if t.ID == tokenizer.BareIdentifier && c.opts.Version != tokenizer.VersionV2 &&
+				!c.opts.RelaxedNonCompliant.Permit(relaxed.NGINXSyntax) {
+				return unexpectedToken(c, t)
+			}
 			if c.ignoreNextArgProp {
 				c.ignoreNextArgProp = false
 			} else if _, err := c.addPropertyToken(c.currentNode(), c.ident, t, c.typeAnnot); err != nil {
@@ -632,11 +664,39 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			return nil
 		},
 		tokenizer.BraceClose: func(c *ParseContext, t tokenizer.Token) error {
-			_, _, err := c.popNodeAndState()
-			if err != nil {
-				return err
-			}
-			return ErrReenterState
+			// a property name with '=' but no value is incomplete
+			return unexpectedToken(c, t)
 		},
 	},
+}
+
+// dispatch is stateTransitions flattened into a dense table indexed by [state][token ID], with token classes
+// pre-resolved into each concrete token ID. A nil entry means the token is unexpected in that state.
+var dispatch [numStates][tokenizer.NumTokenIDs]stateTransitionFunc
+
+func init() {
+	for state, handlers := range stateTransitions {
+		for id := 0; id < tokenizer.NumTokenIDs; id++ {
+			tid := tokenizer.TokenID(id)
+			// an exact ID handler wins; otherwise the first class (in Classes order) that has a handler
+			if h, ok := handlers[tid]; ok {
+				dispatch[state][id] = h
+				continue
+			}
+			for _, class := range tid.Classes() {
+				if h, ok := handlers[class]; ok {
+					dispatch[state][id] = h
+					break
+				}
+			}
+		}
+	}
+}
+
+// lookupTransition returns the handler for a token ID in a state, or nil if out of range or unhandled.
+func lookupTransition(state parserState, id tokenizer.TokenID) stateTransitionFunc {
+	if uint(state) >= uint(numStates) || uint(id) >= uint(tokenizer.NumTokenIDs) {
+		return nil
+	}
+	return dispatch[state][id]
 }

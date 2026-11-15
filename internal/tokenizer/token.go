@@ -53,9 +53,14 @@ const (
 	ClassTerminator
 	ClassEndOfLine
 	ClassComment
+
+	numTokenIDs // sentinel: keep last; not a valid TokenID
 )
 
-var tokenClasses = map[TokenID][]TokenID{
+// NumTokenIDs is one more than the highest TokenID value, for sizing tables indexed by TokenID.
+const NumTokenIDs = int(numTokenIDs)
+
+var tokenClasses = [NumTokenIDs][]TokenID{
 	Newline:           {ClassTerminator, ClassWhitespace, ClassEndOfLine},
 	Whitespace:        {ClassWhitespace},
 	MultiLineComment:  {ClassComment},
@@ -85,6 +90,9 @@ var tokenClasses = map[TokenID][]TokenID{
 }
 
 func (t TokenID) Classes() []TokenID {
+	if uint(t) >= uint(NumTokenIDs) {
+		return nil
+	}
 	return tokenClasses[t]
 }
 

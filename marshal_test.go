@@ -211,8 +211,8 @@ person "Bob" "Smith"
 `
 
 	kdlOutputMarshalTextNode = `
-father "\"Bob\""
-mother "\"Jane\""
+father "\"Bob\" \"Johnson\" age=32 active=true"
+mother "\"Jane\" \"Johnson\" age=28 active=true"
 `
 
 	kdlOutputMarshalKDLNode = "father \"BOB\" \"JOHNSON\" age=32 active=true\n" +

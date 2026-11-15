@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"strings"
-	"sync"
 	"unicode/utf8"
 
 	"github.com/njreid/gokdl2/relaxed"
@@ -34,6 +33,7 @@ type Scanner struct {
 	len                   int
 	peeked                []peeked
 	line                  int
+	prevCR                bool // the last consumed rune was '\r', so a following '\n' completes the same line break
 	column                int
 	token                 Token
 	err                   error
@@ -45,6 +45,22 @@ type Scanner struct {
 	versionMarkerDetected bool
 	r                     io.Reader
 	lastErr               error
+
+	// tokStart is the byte offset in raw at which the token most recently started by readNext begins; error
+	// positions are reported there (see errorPosition)
+	tokStart int
+	// prev describes the last token successfully returned by Scan/ScanAll: its ID, 0-based line/column, start offset
+	// and end offset
+	prev struct {
+		id               TokenID
+		line, col        int
+		startOff, endOff int
+	}
+
+	// identTable caches which ASCII bytes continue a bare identifier for the version and flags in identTableKey
+	identTable    [256]bool
+	identTableKey identTableKey
+	identTableSet bool
 }
 
 func (s *Scanner) Read(p []byte) (n int, err error) {
@@ -55,6 +71,9 @@ func (s *Scanner) Read(p []byte) (n int, err error) {
 		s.refill()
 	}
 	if len(s.input) == 0 {
+		if s.err != nil {
+			return 0, s.err
+		}
 		return 0, io.EOF
 	}
 	n = copy(p, s.input)
@@ -84,7 +103,7 @@ func (s *Scanner) peekSize() (rune, int, error) {
 		if size == 0 {
 			return 0, 0, io.EOF
 		}
-		if c == utf8.RuneError {
+		if c == utf8.RuneError && size == 1 {
 			return 0, 0, ErrInvalidRune
 		}
 		s.peeked = s.peeked[0:1]
@@ -115,7 +134,7 @@ func (s *Scanner) peekTwoSize() (rune, int, rune, int, error) {
 		if size == 0 {
 			return 0, 0, 0, 0, io.EOF
 		}
-		if c == utf8.RuneError {
+		if c == utf8.RuneError && size == 1 {
 			return 0, 0, 0, 0, ErrInvalidRune
 		}
 		peekedSize += size
@@ -170,7 +189,7 @@ func (s *Scanner) peekAtSize(n int) (rune, int, error) {
 		if size == 0 {
 			return 0, 0, io.EOF
 		}
-		if c == utf8.RuneError {
+		if c == utf8.RuneError && size == 1 {
 			return 0, 0, ErrInvalidRune
 		}
 		peekedSize += size
@@ -200,17 +219,20 @@ func (s *Scanner) get() (rune, error) {
 		if size == 0 {
 			return 0, io.EOF
 		}
-		if c == utf8.RuneError {
+		if c == utf8.RuneError && size == 1 {
 			return 0, ErrInvalidRune
 		}
 	}
 
-	if isNewline(c) {
+	if c == '\n' && s.prevCR {
+		// second half of a CRLF pair: the line break was already counted at the '\r'
+	} else if isNewline(c) {
 		s.line++
-		s.column = 1
+		s.column = 0
 	} else {
 		s.column++
 	}
+	s.prevCR = c == '\r'
 
 	s.input = s.input[size:]
 	s.len -= size
@@ -329,8 +351,12 @@ func (s *Scanner) copyFromMark() []byte {
 func (s *Scanner) readWhile(validRune func(c rune) bool, minLength int) ([]byte, error) {
 	s.pushMark()
 	defer s.popMark()
+	return s.readWhileMarked(validRune, minLength, false)
+}
 
-	valid := false
+// readWhileMarked is readWhile for a caller that has already pushed a mark; valid reports whether the caller has
+// already consumed at least one valid rune after the mark.
+func (s *Scanner) readWhileMarked(validRune func(c rune) bool, minLength int, valid bool) ([]byte, error) {
 	for {
 		c, err := s.peek()
 		if err != nil && err != io.EOF {
@@ -389,28 +415,17 @@ func (s *Scanner) SizeEstimate() int {
 	return len(s.raw)
 }
 
-type staticScanner struct {
-	s  Scanner
-	mu sync.Mutex
-}
-
-var staticScan = staticScanner{
-	s: Scanner{
-		peeked: make([]peeked, 0, 4),
-		marks:  make([]int, 0, 8),
-	},
-}
-
+// ScanOne scans the first token from b using a fresh scanner.
 func ScanOne(b []byte) (Token, error) {
-	staticScan.mu.Lock()
-	defer staticScan.mu.Unlock()
+	tok, _, err := ScanOneN(b)
+	return tok, err
+}
 
-	staticScan.s.raw = b
-	staticScan.s.input = b
-	staticScan.s.len = len(b)
-	staticScan.s.peeked = staticScan.s.peeked[:0]
-	staticScan.s.marks = staticScan.s.marks[:0]
-	return staticScan.s.readNext()
+// ScanOneN is like ScanOne but also reports how many bytes of b the token consumed.
+func ScanOneN(b []byte) (Token, int, error) {
+	s := NewSlice(b)
+	tok, err := s.readNext()
+	return tok, s.Offset(), err
 }
 
 // detectVersion peeks at the start of the input for a /- kdl-version N marker and updates s.Version.
@@ -508,15 +523,32 @@ func (s *Scanner) detectVersion() {
 	}
 }
 
+// DetectVersion reports the KDL version declared by a leading "/- kdl-version N" marker in input, or VersionAuto if
+// there is no marker.
+func DetectVersion(input []byte) Version {
+	s := NewSlice(input)
+	s.detectVersion()
+	return s.Version
+}
+
 // readNext reads and returns the next token from the input buffer, or a non-nil error on failure
 func (s *Scanner) readNext() (Token, error) {
 	if s.Version == VersionAuto && !s.versionMarkerDetected {
 		s.detectVersion()
 	}
+	s.tokStart = s.Offset()
 	token := Token{
 		Line:    s.line,
 		Column:  s.column,
 		Version: s.Version,
+	}
+
+	if s.canFastScan() && len(s.input) > 0 && (s.input[0] == ' ' || s.input[0] == '\t') {
+		if data, ok := s.readWhitespaceFast(); ok {
+			token.ID = Whitespace
+			token.Data = data
+			return token, nil
+		}
 	}
 
 	c, size, err := s.peekSize()
@@ -614,7 +646,7 @@ func (s *Scanner) readNext() (Token, error) {
 					return token, err
 				}
 			} else {
-				return token, fmt.Errorf("unexpected character %c", c)
+				return token, errUnexpectedSlash
 			}
 		}
 
@@ -671,9 +703,13 @@ func (s *Scanner) readNext() (Token, error) {
 		}
 
 	case '?', '+', '-': // sign or v2 identifier start
-		s.log("reading signed value or identifier", "c", c)
+		if s.Logger != nil {
+			s.log("reading signed value or identifier", "c", c)
+		}
 		_, c2, err := s.peekTwo()
-		s.log("peeked c2", "c2", c2, "err", err)
+		if s.Logger != nil {
+			s.log("peeked c2", "c2", c2, "err", err)
+		}
 		if err != nil {
 			if err == io.EOF && c != '?' {
 				if token.ID, token.Data, err = s.readIdentifier(); err != nil {
@@ -688,6 +724,10 @@ func (s *Scanner) readNext() (Token, error) {
 			if token.ID, token.Data, err = s.readIdentifier(); err != nil {
 				return token, err
 			}
+		} else if c2 == '0' && s.isSignedPrefixedNumber() {
+			if err = s.readSignedPrefixedNumber(&token); err != nil {
+				return token, err
+			}
 		} else if isDigit(c2) {
 			s.log("calling readDecimal")
 			if token.ID, token.Data, err = s.readDecimal(); err != nil {
@@ -699,7 +739,9 @@ func (s *Scanner) readNext() (Token, error) {
 				return token, err
 			}
 		}
-		s.log("got sign/ident token", "token", token)
+		if s.Logger != nil {
+			s.log("got sign/ident token", "token", token)
+		}
 		return token, nil
 
 	case '0':
@@ -710,19 +752,19 @@ func (s *Scanner) readNext() (Token, error) {
 			switch c {
 			case 'x':
 				token.ID = Hexadecimal
-				if token.Data, err = s.readHexadecimal(); err != nil {
+				if token.Data, err = s.readHexadecimal(2); err != nil {
 					return token, err
 				}
 
 			case 'o':
 				token.ID = Octal
-				if token.Data, err = s.readOctal(); err != nil {
+				if token.Data, err = s.readOctal(2); err != nil {
 					return token, err
 				}
 
 			case 'b':
 				token.ID = Binary
-				if token.Data, err = s.readBinary(); err != nil {
+				if token.Data, err = s.readBinary(2); err != nil {
 					return token, err
 				}
 
@@ -804,6 +846,11 @@ func (s *Scanner) extractLineAtOffset(offset int) string {
 	if search == len(s.raw) {
 		search--
 	}
+	if search > 0 && s.raw[search] == '\n' && s.raw[search-1] == '\r' {
+		// the '\n' of a CRLF pair belongs to the same line break as the '\r'
+		search--
+		offset--
+	}
 
 	start := search
 	for start > 0 {
@@ -863,6 +910,9 @@ func (s *Scanner) ExtractLineAtPosition(line, column int) string {
 	lineStart := 0
 	for i := 0; i < len(s.raw) && currentLine < line; i++ {
 		if isNewline(rune(s.raw[i])) {
+			if s.raw[i] == '\r' && i+1 < len(s.raw) && s.raw[i+1] == '\n' {
+				i++
+			}
 			currentLine++
 			lineStart = i + 1
 		}
@@ -885,10 +935,46 @@ func (s *Scanner) ExtractLineAtPosition(line, column int) string {
 	return s.extractLineAtOffset(offset)
 }
 
-// annotatedError annotates err with the input line/column and positionSummary from the input buffer
-func (s *Scanner) annotatedError(err error) error {
-	line, column := s.Pos()
-	return fmt.Errorf("scan failed: %w at line %d, column %d\n%s", err, line, column, s.extractLineAtOffset(len(s.raw)-len(s.input)))
+// errUnexpectedSlash is returned for a '/' that does not start a comment
+var errUnexpectedSlash = errors.New("unexpected character /")
+
+// preciseError marks a scan error that is reported at the scanner's position when it was raised rather than at the
+// start of the token being read. It is used for errors inside a string token (a bad escape, a newline in a v2
+// single-line string): pointing at the offending character is more helpful there than pointing at the opening quote.
+type preciseError struct{ error }
+
+func (e preciseError) Unwrap() error { return e.error }
+
+// errorPosition returns the 0-based line and column and the byte offset in raw at which err, returned by readNext for
+// tok, should be reported.
+//
+// The rule, matching kdl-rs, is to report the start of the offending token. The exceptions are errors that point at a
+// specific character: invalid UTF-8 (anywhere) and the preciseError cases inside strings; those are reported at the
+// current scan position, which is the offending character because the scanner does not consume it. An unterminated
+// string is reported at its opening quote like any other token-level error.
+func (s *Scanner) errorPosition(err error, tok Token) (line, column, offset int) {
+	var pe preciseError
+	if errors.As(err, &pe) || errors.Is(err, ErrInvalidRune) {
+		return s.line, s.column, s.Offset()
+	}
+	if errors.Is(err, errUnexpectedSlash) && s.prev.id == BareIdentifier && s.prev.endOff == s.tokStart {
+		// a '/' glued to the identifier before it: kdl-rs lexes the whole run as one malformed identifier
+		return s.prev.line, s.prev.col, s.prev.startOff
+	}
+	return tok.Line, tok.Column, s.tokStart
+}
+
+// annotatedError annotates err, returned by readNext for tok, with the input line/column and a source excerpt with a
+// caret; see errorPosition for where the error is reported
+func (s *Scanner) annotatedError(err error, tok Token) error {
+	line, column, offset := s.errorPosition(err, tok)
+	return fmt.Errorf("scan failed: %w at line %d, column %d\n%s", err, line+1, column+1, s.extractLineAtOffset(offset))
+}
+
+// noteToken records tok, just returned by readNext, as the previous token
+func (s *Scanner) noteToken(tok Token) {
+	s.prev.id, s.prev.line, s.prev.col = tok.ID, tok.Line, tok.Column
+	s.prev.startOff, s.prev.endOff = s.tokStart, s.Offset()
 }
 
 // SimpleLogger provides a simple logger that writes to stderr; this can be assigned to Scanner.Logger for debugging
@@ -939,8 +1025,12 @@ func NewBuffer(r io.Reader, b []byte) *Scanner {
 
 	nr, err := io.ReadFull(r, b)
 	if err != nil {
-		if err != io.ErrUnexpectedEOF {
+		if err != io.ErrUnexpectedEOF && err != io.EOF {
+			// retain what was read so far; the error is surfaced by Err/Read
 			s.err = err
+			s.input = b[0:nr]
+			s.raw = s.input
+			s.len = nr
 			return s
 		}
 		// nothing more to read; don't retain the reader
@@ -972,12 +1062,13 @@ func (s *Scanner) ScanAll() ([]Token, error) {
 	tokens := make([]Token, 0, len(s.input)/2)
 	for {
 		if token, err := s.readNext(); err == nil {
+			s.noteToken(token)
 			tokens = append(tokens, token)
 		} else if err == io.EOF {
 			break
 		} else {
 			s.log("failed", "error", err)
-			return nil, s.annotatedError(err)
+			return nil, s.annotatedError(err, token)
 		}
 	}
 
@@ -1005,6 +1096,7 @@ func (s *Scanner) Scan() bool {
 	}
 
 	if s.token, s.err = s.readNext(); s.err == nil {
+		s.noteToken(s.token)
 		return true
 	} else if s.err == io.EOF {
 		s.token = eofToken
@@ -1013,7 +1105,7 @@ func (s *Scanner) Scan() bool {
 		s.token.Version = s.Version
 		return true
 	} else {
-		s.err = s.annotatedError(s.err)
+		s.err = s.annotatedError(s.err, s.token)
 		return false
 	}
 }

@@ -70,6 +70,21 @@ func isSeparator(c rune) bool {
 	return isWhiteSpace(c) || isNewline(c) || c == ';'
 }
 
+// isNumberTerminator reports whether c may directly follow a number literal. Per the KDL grammar a value may be
+// followed by node-space (whitespace, a /* */ comment, or a '\' line continuation), a slashdash, a node terminator
+// ('//' comment, newline, ';'), a child block '{', or the '}' closing the parent's child block. '/' is accepted here
+// and the tokenizer then rejects anything other than '//', '/*' or '/-'. In relaxed NGINX mode '/' and '\' are
+// identifier characters, so they continue the token instead.
+func isNumberTerminator(c rune, r relaxed.Flags) bool {
+	switch c {
+	case ';', '{', '}':
+		return true
+	case '/', '\\':
+		return !r.Permit(relaxed.NGINXSyntax)
+	}
+	return isWhiteSpace(c) || isNewline(c)
+}
+
 // isBareIdentifierStartChar indicates whether c is a valid first character for a bare identifier. Note that this
 // returns true if c is + or -, in which case the second character must not be a digit.
 func isBareIdentifierStartChar(c rune, r relaxed.Flags) bool {

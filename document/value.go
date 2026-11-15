@@ -47,6 +47,8 @@ func (f ValueFlag) Has(flag ValueFlag) bool {
 type Value struct {
 	// Type is the value type, if an annotation was provided
 	Type TypeAnnotation
+	// EmptyType is true when an explicitly empty type annotation, eg `("")1`, was present
+	EmptyType bool
 	// Value is the actual value
 	Value interface{}
 	// Flag is any flag assigned for use in output
@@ -112,66 +114,35 @@ func (v *Value) value(b []byte, opts valueOpts) []byte {
 		case v.Flag.Has(FlagHexadecimal):
 			base = 16
 			prefix = "0x"
-			b = make([]byte, 0, 18)
+			if b == nil {
+				b = make([]byte, 0, 18)
+			}
 		}
 	}
 
 	switch x := v.Value.(type) {
 	case uint:
-		if base != 10 {
-			b = append(b, prefix...)
-		}
-		b = strconv.AppendUint(b, uint64(x), base)
+		b = appendUnsigned(b, uint64(x), base, prefix)
 	case uint8:
-		if base != 10 {
-			b = append(b, prefix...)
-		}
-		b = strconv.AppendUint(b, uint64(x), base)
+		b = appendUnsigned(b, uint64(x), base, prefix)
 	case uint16:
-		if base != 10 {
-			b = append(b, prefix...)
-		}
-		b = strconv.AppendUint(b, uint64(x), base)
+		b = appendUnsigned(b, uint64(x), base, prefix)
 	case uint32:
-		if base != 10 {
-			b = append(b, prefix...)
-		}
-		b = strconv.AppendUint(b, uint64(x), base)
+		b = appendUnsigned(b, uint64(x), base, prefix)
 	case uint64:
-		if base != 10 {
-			b = append(b, prefix...)
-		}
-		b = strconv.AppendUint(b, x, base)
+		b = appendUnsigned(b, x, base, prefix)
 	case uintptr:
-		if base != 10 {
-			b = append(b, prefix...)
-		}
-		b = strconv.AppendUint(b, uint64(x), base)
+		b = appendUnsigned(b, uint64(x), base, prefix)
 	case int:
-		if base != 10 {
-			b = append(b, prefix...)
-		}
-		b = strconv.AppendInt(b, int64(x), base)
+		b = appendSigned(b, int64(x), base, prefix)
 	case int8:
-		if base != 10 {
-			b = append(b, prefix...)
-		}
-		b = strconv.AppendInt(b, int64(x), base)
+		b = appendSigned(b, int64(x), base, prefix)
 	case int16:
-		if base != 10 {
-			b = append(b, prefix...)
-		}
-		b = strconv.AppendInt(b, int64(x), base)
+		b = appendSigned(b, int64(x), base, prefix)
 	case int32:
-		if base != 10 {
-			b = append(b, prefix...)
-		}
-		b = strconv.AppendInt(b, int64(x), base)
+		b = appendSigned(b, int64(x), base, prefix)
 	case int64:
-		if base != 10 {
-			b = append(b, prefix...)
-		}
-		b = strconv.AppendInt(b, x, base)
+		b = appendSigned(b, x, base, prefix)
 	case float32:
 		if haveOpt(voVersionV2) {
 			if math.IsInf(float64(x), 1) {
@@ -234,7 +205,8 @@ func (v *Value) value(b []byte, opts valueOpts) []byte {
 		if haveOpt(voVersionV2) {
 			version = tokenizer.VersionV2
 		}
-		isBare := tokenizer.IsBareIdentifierVersion(x, 0, version)
+		// the tokenizer accepts some strings as identifiers that contain characters that may not appear literally
+		isBare := tokenizer.IsBareIdentifierVersion(x, 0, version) && (version != tokenizer.VersionV2 || canLiteralString(x))
 
 		if b == nil {
 			size := len(x)
@@ -252,19 +224,20 @@ func (v *Value) value(b []byte, opts valueOpts) []byte {
 				hashes = -1
 			}
 
-			if v.Flag.Has(FlagMultiLine) && haveOpt(voStrictStringFlags) {
-				if v.Flag.Has(FlagRaw) && haveOpt(voVersionV2) {
+			if v.Flag.Has(FlagMultiLine) && haveOpt(voStrictStringFlags) && haveOpt(voVersionV2) {
+				// a raw multi-line string cannot represent every value, so fall back to an escaped multi-line string
+				if v.Flag.Has(FlagRaw) && canRawMultiLine(x) {
 					b = AppendMultiLineStringV2(b, x, hashes)
 				} else {
 					b = AppendMultiLineString(b, x)
 				}
-			} else if v.Flag.Has(FlagRaw) && haveOpt(voStrictStringFlags) {
+			} else if v.Flag.Has(FlagRaw) && haveOpt(voStrictStringFlags) && (!haveOpt(voVersionV2) || canRawString(x)) {
 				if haveOpt(voVersionV2) {
 					b = AppendRawStringV2(b, x, hashes)
 				} else {
 					b = AppendRawString(b, x, hashes)
 				}
-			} else if v.Flag.Has(FlagQuoted) || (v.Flag.Has(FlagRaw) && !haveOpt(voStrictStringFlags)) || (v.Flag.Has(FlagMultiLine) && !haveOpt(voStrictStringFlags)) {
+			} else if v.Flag.Has(FlagQuoted) || v.Flag.Has(FlagRaw) || v.Flag.Has(FlagMultiLine) {
 				b = AppendQuotedString(b, x, '"')
 			} else if isBare && !haveOpt(voNoBare) {
 				b = append(b, x...)
@@ -291,7 +264,15 @@ func (v *Value) value(b []byte, opts valueOpts) []byte {
 		}
 
 	case *big.Int:
-		b = x.Append(b, base)
+		if base != 10 {
+			if x.Sign() < 0 {
+				b = append(b, '-')
+			}
+			b = append(b, prefix...)
+			b = new(big.Int).Abs(x).Append(b, base)
+		} else {
+			b = x.Append(b, base)
+		}
 	case *big.Float:
 		exp := x.MantExp(nil)
 		if exp > 9 || exp < -9 {
@@ -315,22 +296,66 @@ func (v *Value) value(b []byte, opts valueOpts) []byte {
 	return b
 }
 
+// appendUnsigned appends x in the given base, with prefix when base is not 10.
+func appendUnsigned(b []byte, x uint64, base int, prefix string) []byte {
+	if base != 10 {
+		b = append(b, prefix...)
+	}
+	return strconv.AppendUint(b, x, base)
+}
+
+// appendSigned appends x in the given base. For bases other than 10 the sign precedes the prefix (-0xff).
+func appendSigned(b []byte, x int64, base int, prefix string) []byte {
+	if base == 10 {
+		return strconv.AppendInt(b, x, base)
+	}
+	var u uint64
+	if x < 0 {
+		b = append(b, '-')
+		u = uint64(-x) // correct for MinInt64 as well
+	} else {
+		u = uint64(x)
+	}
+	b = append(b, prefix...)
+	return strconv.AppendUint(b, u, base)
+}
+
 // string returns the KDL representation of this value with the specified opts, including type annotation if available,
 // eg: (u8)1234
 func (v *Value) string(opts valueOpts, version tokenizer.Version) string {
+	var b []byte
+	if len(v.Type) > 0 || v.EmptyType {
+		b = make([]byte, 0, 32)
+	}
+	return string(v.appendString(b, opts, version))
+}
+
+// appendString appends the KDL representation of this value with the specified opts, including type annotation if
+// available, to b and returns the expanded buffer.
+func (v *Value) appendString(b []byte, opts valueOpts, version tokenizer.Version) []byte {
 	if version == tokenizer.VersionV2 {
 		opts |= voVersionV2
 	}
-	var b []byte
-	if len(v.Type) > 0 {
-		b = make([]byte, 0, 32)
+	if len(v.Type) > 0 || v.EmptyType {
 		b = append(b, '(')
-		b = append(b, v.Type...)
+		b = appendTypeAnnotationName(b, v.Type, version)
 		b = append(b, ')')
 	}
+	return v.value(b, opts)
+}
 
-	b = v.value(b, opts)
-	return string(b)
+// argValueOpts returns the valueOpts used to render arguments and property values.
+func argValueOpts(unformatted bool, version tokenizer.Version) valueOpts {
+	if version == tokenizer.VersionV2 {
+		if unformatted {
+			return voSimpleString
+		}
+		return voNoBare | voUseNumericFlags | voStrictStringFlags
+	}
+	if unformatted {
+		return voNoBare
+	}
+	return voNoBare | voUseNumericFlags
 }
 
 // String returns the KDL representation of this Value, including type annotation, formatting numbers and strings per
@@ -475,12 +500,22 @@ func stripUnderscores(b []byte, underscoreCount int) []byte {
 // parseNumber parses a number from b in the specified base, and returns an interface{} containing either a float64,
 // an int64, a *big.Float, or a *big.Int, depending on the size and type of the number in b
 func parseNumber(b []byte, base int) (interface{}, error) {
+	var sign []byte
 	if base != 10 {
+		if len(b) > 0 && (b[0] == '+' || b[0] == '-') {
+			if b[0] == '-' {
+				sign = b[:1]
+			}
+			b = b[1:]
+		}
 		b = b[2:] // strip 0x, 0o, 0b
 	}
 	underscoreCount, float := classifyNumber(b, base)
 	b = stripUnderscores(b, underscoreCount)
 	bstr := bytesToString(b)
+	if sign != nil {
+		bstr = "-" + bstr
+	}
 
 	var (
 		v   interface{}

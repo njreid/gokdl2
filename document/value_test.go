@@ -10,8 +10,8 @@ func Test_rawString(t *testing.T) {
 		want string
 	}{
 		{`This is a test`, `r"This is a test"`},
-		{`This "is" a test`, `r"This "is" a test"`},
-		{`This #"is"# a test`, `r#"This #"is"# a test"#`},
+		{`This "is" a test`, `r#"This "is" a test"#`},
+		{`This #"is"# a test`, `r##"This #"is"# a test"##`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.s, func(t *testing.T) {

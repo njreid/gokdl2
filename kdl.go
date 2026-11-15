@@ -1,6 +1,7 @@
 package kdl
 
 import (
+	"errors"
 	"fmt"
 	"io"
 
@@ -27,40 +28,68 @@ func (v ParseVersion) tokenizerVersion() tokenizer.Version {
 	return tokenizer.Version(v)
 }
 
-func parse(s *tokenizer.Scanner, inputSizeEstimate int) (*document.Document, error) {
-	if s.Version != tokenizer.VersionAuto {
-		return parseOne(s, inputSizeEstimate)
+// parseBytes parses data, which it takes ownership of: parsed strings alias data, so callers must pass a buffer that
+// nothing else will modify.
+func parseBytes(data []byte, opts ParseOptions) (*document.Document, error) {
+	newScanner := func(v tokenizer.Version) *tokenizer.Scanner {
+		s := tokenizer.NewSlice(data)
+		s.RelaxedNonCompliant = opts.RelaxedNonCompliant
+		s.ParseComments = opts.ParseComments
+		s.Version = v
+		return s
 	}
 
-	// for VersionAuto, we need to be able to retry if the first attempt fails
-	// and it was likely a v1 document
-	data, err := io.ReadAll(s)
+	v := opts.Version.tokenizerVersion()
+	if v == tokenizer.VersionAuto {
+		// an explicit version marker is authoritative: no fallback
+		v = tokenizer.DetectVersion(data)
+	}
+	if v != tokenizer.VersionAuto {
+		return parseOne(newScanner(v), len(data))
+	}
+
+	// no marker: v2 is the default version, but fall back to v1 if the document does not parse as v2
+	doc, err2 := parseOne(newScanner(tokenizer.VersionV2), len(data))
+	if err2 == nil {
+		return doc, nil
+	}
+	doc, err1 := parseOne(newScanner(tokenizer.VersionV1), len(data))
+	if err1 == nil {
+		return doc, nil
+	}
+	return nil, fmt.Errorf("%w\n(the document also failed to parse as KDL v1: %v)", err2, err1)
+}
+
+// parseReader reads r to completion exactly once and parses the result.
+func parseReader(r io.Reader, opts ParseOptions) (*document.Document, error) {
+	data, err := readAll(r)
 	if err != nil {
 		return nil, err
 	}
+	return parseBytes(data, opts)
+}
 
-	// try v2 first
-	s2 := tokenizer.NewSlice(data)
-	s2.RelaxedNonCompliant = s.RelaxedNonCompliant
-	s2.ParseComments = s.ParseComments
-	s2.Version = tokenizer.VersionV2
-	doc, err := parseOne(s2, len(data))
-	if err == nil {
-		return doc, nil
+// readAll reads r until EOF into a single buffer sized from the reader's Len/Size hint when available.
+func readAll(r io.Reader) ([]byte, error) {
+	hint := estimateReaderSize(r)
+	if hint < 511 {
+		hint = 511
 	}
-
-	// if v2 failed, it might be a v1 document; if it had a v2 marker, don't fallback
-	if s2.Version == tokenizer.VersionV2 && s2.Offset() > 0 {
-		// if version was explicitly set to v2 by marker, don't fallback
-		return nil, err
+	// one spare byte lets us see EOF without growing the buffer when the hint is exact
+	data := make([]byte, 0, hint+1)
+	for {
+		n, err := r.Read(data[len(data):cap(data)])
+		data = data[:len(data)+n]
+		if err != nil {
+			if err == io.EOF {
+				return data, nil
+			}
+			return nil, err
+		}
+		if len(data) == cap(data) {
+			data = append(data, 0)[:len(data)]
+		}
 	}
-
-	// fallback to v1
-	s1 := tokenizer.NewSlice(data)
-	s1.RelaxedNonCompliant = s.RelaxedNonCompliant
-	s1.ParseComments = s.ParseComments
-	s1.Version = tokenizer.VersionV1
-	return parseOne(s1, len(data))
 }
 
 func parseOne(s *tokenizer.Scanner, inputSizeEstimate int) (*document.Document, error) {
@@ -86,7 +115,14 @@ func parseOne(s *tokenizer.Scanner, inputSizeEstimate int) (*document.Document, 
 			if err == parser.ErrReenterState {
 				continue
 			}
-			return nil, fmt.Errorf("parse failed: %w at line %d, column %d\n%s", err, tok.Line+1, tok.Column+1, s.ExtractLineAtPosition(tok.Line+1, tok.Column+1))
+			// an error caused by an earlier pending token (an unclosed '{', a bare identifier awaiting '=') carries that
+			// token's position; otherwise the offending token is the current one
+			at := tok
+			var pe *parser.PosError
+			if errors.As(err, &pe) {
+				at.Line, at.Column = pe.Line, pe.Column
+			}
+			return nil, fmt.Errorf("parse failed: %w at line %d, column %d\n%s", err, at.Line+1, at.Column+1, s.ExtractLineAtPosition(at.Line+1, at.Column+1))
 		}
 	}
 	if s.Err() != nil {
@@ -133,12 +169,7 @@ func Parse(r io.Reader) (*document.Document, error) {
 }
 
 func ParseWithOptions(r io.Reader, opts ParseOptions) (*document.Document, error) {
-	sizeEstimate := estimateReaderSize(r)
-	s := tokenizer.New(r)
-	s.RelaxedNonCompliant = opts.RelaxedNonCompliant
-	s.ParseComments = opts.ParseComments
-	s.Version = opts.Version.tokenizerVersion()
-	return parse(s, sizeEstimate)
+	return parseReader(r, opts)
 }
 
 type GenerateOptions = generator.Options

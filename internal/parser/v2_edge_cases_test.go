@@ -26,7 +26,7 @@ func TestParserV2EdgeCases(t *testing.T) {
 			name:    "triple-quote with leading whitespace",
 			input:   "node \"\"\"  \n  content\n  \"\"\"",
 			version: tokenizer.VersionV2,
-			expect:  "node \"\"\"\ncontent\"\"\"",
+			expect:  "node \"\"\"\ncontent\n\"\"\"",
 		},
 		{
 			name:    "triple-quote must have newline",

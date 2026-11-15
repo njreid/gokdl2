@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        go: [go.mod, stable]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Go from go.mod
+        if: matrix.go == 'go.mod'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Set up Go stable
+        if: matrix.go == 'stable'
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - run: go vet ./...
+      - run: go test ./...
+      - run: go test -race ./...

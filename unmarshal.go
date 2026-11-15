@@ -6,7 +6,6 @@ import (
 
 	"github.com/njreid/gokdl2/document"
 	"github.com/njreid/gokdl2/internal/marshaler"
-	"github.com/njreid/gokdl2/internal/tokenizer"
 )
 
 type UnmarshalOptions = marshaler.UnmarshalOptions
@@ -31,14 +30,11 @@ type Decoder struct {
 // Decode decodes KDL from the Decoder's reader into v; v must contain a pointer type. Returns a non-nil error on
 // failure.
 func (d *Decoder) Decode(v interface{}) error {
-	s := tokenizer.New(d.r)
-	s.RelaxedNonCompliant = d.Options.RelaxedNonCompliant
-	s.ParseComments = d.Options.ParseComments
-	if doc, err := parse(s, estimateReaderSize(d.r)); err != nil {
+	doc, err := parseReader(d.r, parseOptionsFor(d.Options))
+	if err != nil {
 		return err
-	} else {
-		return marshaler.UnmarshalWithOptions(doc, v, d.Options)
 	}
+	return marshaler.UnmarshalWithOptions(doc, v, d.Options)
 }
 
 // NewDecoder returns a Decoder that reads from r
@@ -46,27 +42,28 @@ func NewDecoder(r io.Reader) *Decoder {
 	return &Decoder{r: r}
 }
 
+func parseOptionsFor(opts UnmarshalOptions) ParseOptions {
+	return ParseOptions{
+		RelaxedNonCompliant: opts.RelaxedNonCompliant,
+		ParseComments:       opts.ParseComments,
+		Version:             ParseVersionAuto,
+	}
+}
+
 // Unmarshal unmarshals KDL from data into v; v must contain a pointer type. Returns a non-nil error on failure.
 func Unmarshal(data []byte, v interface{}) error {
-	s := tokenizer.NewSlice(data)
-	if doc, err := parse(s, len(data)); err != nil {
-		return err
-	} else {
-		return marshaler.Unmarshal(doc, v)
-	}
+	return UnmarshalWithOptions(data, v, UnmarshalOptions{})
 }
 
 // UnmarshalWithOptions unmarshals KDL from data into v with the specified options; v must contain a pointer type.
 // Returns a non-nil error on failure.
 func UnmarshalWithOptions(data []byte, v interface{}, opts UnmarshalOptions) error {
-	s := tokenizer.NewSlice(data)
-	s.RelaxedNonCompliant = opts.RelaxedNonCompliant
-	s.ParseComments = opts.ParseComments
-	if doc, err := parse(s, len(data)); err != nil {
+	// parsed strings alias the buffer they were parsed from, so parse a private copy of the caller's data
+	doc, err := parseBytes(append([]byte(nil), data...), parseOptionsFor(opts))
+	if err != nil {
 		return err
-	} else {
-		return marshaler.Unmarshal(doc, v)
 	}
+	return marshaler.UnmarshalWithOptions(doc, v, opts)
 }
 
 func UnmarshalDocument(doc *document.Document, v interface{}) error {
