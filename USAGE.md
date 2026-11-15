@@ -1,6 +1,6 @@
 # Usage
 
-`gokdl2` supports parsing, generation, marshaling, unmarshaling, version selection, and expression literals.
+`gokdl2` supports parsing, generation, marshaling, unmarshaling, version selection, and [expression strings](#expression-strings).
 
 ## Parsing
 
@@ -47,21 +47,132 @@ fmt.Println(v1doc.Version, v2doc.Version)
 1 2
 ```
 
-## Expressions
+## Expression strings
 
-Backtick-delimited expressions are parsed as `document.Expression` instead of ordinary strings, so downstream code can distinguish them from plain text.
+`gokdl2` extends KDL with backtick-delimited **expression strings** for embedding code, such as CEL, JMESPath, SQL fragments or templates, without having to escape every quote. They parse to `document.Expression`, a string type distinct from ordinary KDL strings, so your code can tell an expression from plain text and pass it to an evaluator.
+
+> **Non-standard.** Expression strings are a `gokdl2` extension, not part of the KDL specification. Other KDL parsers reject documents that use them. `gokdl2` accepts them in v1, v2 and automatic mode, with no option required.
+
+### Syntax
+
+A **single-line** expression is wrapped in single backticks. Double quotes need no escaping:
+
+```kdl
+rule `request.auth.claims.role == "admin"`
+```
+
+A **multi-line** expression uses triple backticks. The opening ```` ``` ```` must be followed by a newline. The indentation of the closing ```` ``` ```` line is removed from every line, as with KDL v2 `"""` strings:
+
+````kdl
+policy ```
+    request.path.startsWith("/admin")
+      && !request.auth.mfa
+    ```
+````
+
+That value is `request.path.startsWith("/admin")\n  && !request.auth.mfa`.
+
+Escapes work as in KDL quoted strings, in both forms:
+
+| Escape | Meaning |
+|---|---|
+| `` \` `` | a literal backtick |
+| `\\` | a backslash |
+| `\n` `\r` `\t` `\b` `\f` `\s` | newline, carriage return, tab, backspace, form feed, space |
+| `\u{1F600}` | a Unicode code point (1–6 hex digits) |
+| `\` followed by whitespace or a newline | removes that whitespace, so a long line can be wrapped |
+
+Any other escape is an error, including `\"`, because double quotes are literal. Comment markers (`//`, `/* */`) and `#` inside an expression are just text. There is no raw form (``#```…```#``), so a backslash always starts an escape.
+
+### Where expressions can appear
+
+Expressions are **values**:
+
+- arguments: `` rule `a > 1` ``
+- property values: `` rule when=`a > 1` ``
+- with a type annotation, for example to name the language: `` rule (cel)`a > 1` ``
+
+They cannot be node names or property keys. In KDL v2 an expression must be separated from neighbouring values by whitespace, like any other value, so ``` rule `a``b` ``` is an error and `` rule `a` `b` `` has two arguments. A `;`, `}`, comment or `/-` may follow directly.
+
+### Reading expressions
 
 ```go
-data := "rule `request.auth.claims.sub` filter=```\nrequest.auth != nil\n```\n"
+data := "rule (cel)`request.auth.claims.role == \"admin\"` deny=```\n" +
+	"    request.path.startsWith(\"/admin\")\n" +
+	"      && !request.auth.mfa\n" +
+	"    ```\n"
 
 doc, err := kdl.Parse(strings.NewReader(data))
 if err != nil {
 	panic(err)
 }
 
-arg := doc.Nodes[0].Arguments[0].ResolvedValue().(document.Expression)
-fmt.Println(arg)
+arg := doc.Nodes[0].Arguments[0]
+expr := arg.Value.(document.Expression)
+fmt.Printf("%s %q\n", arg.Type, expr)
+
+deny, _ := doc.Nodes[0].Properties.Get("deny")
+fmt.Printf("%q\n", deny.Value.(document.Expression))
 ```
+
+```text
+cel "request.auth.claims.role == \"admin\""
+"request.path.startsWith(\"/admin\")\n  && !request.auth.mfa"
+```
+
+`Value.ResolvedValue()` also returns the `document.Expression`, and `Value.ValueString()` returns its text. Parsed values carry `document.FlagExpression`, plus `document.FlagMultiLine` for the triple-backtick form.
+
+### Writing expressions
+
+Any `document.Expression` value is generated with backticks. A value containing a newline is written in triple-backtick form, and backticks inside the value are escaped.
+
+```go
+node := document.NewNode()
+node.SetName("rule")
+node.AddArgument(document.Expression("size(items) > 0"), "")
+node.AddProperty("when", document.Expression("a\n&& b"), "")
+
+fmt.Println(node.String())
+```
+
+````text
+rule `size(items) > 0` when=```
+a
+&& b
+```
+````
+
+### Marshaling and unmarshaling
+
+Struct fields of type `document.Expression` marshal as expressions. An expression unmarshals into a `document.Expression` field, into a `string` field (as its text), or into an `interface{}` field, where it stays a `document.Expression`. Ordinary quoted strings also unmarshal into `document.Expression` fields.
+
+```go
+type Policy struct {
+	Allow document.Expression `kdl:"allow"`
+	Note  string              `kdl:"note"`
+	Any   interface{}         `kdl:"any,omitempty"`
+}
+
+out, err := kdl.Marshal(Policy{Allow: "user.admin", Note: "plain text"})
+if err != nil {
+	panic(err)
+}
+fmt.Print(string(out))
+
+var p Policy
+if err := kdl.Unmarshal([]byte("allow `user.admin`\nnote `as text`\nany `kept`\n"), &p); err != nil {
+	panic(err)
+}
+fmt.Printf("%q %q %T\n", p.Allow, p.Note, p.Any)
+```
+
+```text
+allow `user.admin`
+note "plain text"
+"user.admin" "as text" document.Expression
+```
+
+These examples are checked by `example_expression_test.go`.
 
 ## Generating
 
