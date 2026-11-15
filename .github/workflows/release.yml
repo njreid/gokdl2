@@ -1,0 +1,72 @@
+name: Release
+
+# Creates a GitHub Release when a version tag is pushed, and can (re)write the notes of an existing release.
+#
+# Notes come from the first of:
+#   1. .github/release-notes/<tag>.md (commit it before tagging, or before a manual run)
+#   2. the body of an annotated tag's message (everything after its first line)
+#   3. GitHub's generated notes (new releases only)
+#
+# Manual run (Actions > Release > Run workflow, or the API) with a tag name updates that release's notes from the
+# notes file on the default branch, creating the release if it doesn't exist. An existing release keeps its title.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing version tag, for example v0.7.0"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::'$TAG' is not a version tag like v1.2.3"
+            exit 1
+          fi
+          git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
+
+          notes_file=".github/release-notes/$TAG.md"
+          body_file="$RUNNER_TEMP/notes.md"
+          if [ -f "$notes_file" ]; then
+            cp "$notes_file" "$body_file"
+            echo "Using $notes_file"
+          elif [ "$(git cat-file -t "refs/tags/$TAG")" = tag ] && \
+               git tag -l --format='%(contents:body)' "$TAG" | grep -q '[^[:space:]]'; then
+            git tag -l --format='%(contents:body)' "$TAG" > "$body_file"
+            echo "Using the annotated tag message"
+          else
+            body_file=""
+          fi
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            if [ -n "$body_file" ]; then
+              gh release edit "$TAG" --notes-file "$body_file"
+              echo "Updated the notes of release $TAG"
+            else
+              echo "Release $TAG exists and there are no notes to apply; leaving it unchanged"
+            fi
+          elif [ -n "$body_file" ]; then
+            gh release create "$TAG" --verify-tag --title "$TAG" --notes-file "$body_file"
+          else
+            gh release create "$TAG" --verify-tag --title "$TAG" --generate-notes
+          fi
