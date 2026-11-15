@@ -1295,6 +1295,40 @@ func TestUnmarshalSuite(t *testing.T) {
 
 }
 
+func TestUnmarshalMultipleNodesIntoMapWithRepeatedKey(t *testing.T) {
+	type item struct {
+		First  string `kdl:"first,child"`
+		Second string `kdl:"second,child"`
+	}
+	type document struct {
+		Items map[string]item `kdl:"item,multiple"`
+	}
+
+	input := `
+item "same" {
+	first "one"
+}
+
+item "same" {
+	second "two"
+}
+
+item "same" {
+	first "updated"
+}
+`
+
+	var got document
+	if err := Unmarshal([]byte(input), &got); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+
+	want := document{Items: map[string]item{"same": {First: "updated", Second: "two"}}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Unmarshal() = %#v; want %#v", got, want)
+	}
+}
+
 func TestUnmarshalProfile(t *testing.T) {
 	cpuf, err := os.Create(filepath.Join(t.TempDir(), "cpu.pprof"))
 	if err != nil {
