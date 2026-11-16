@@ -38,6 +38,10 @@ type ParseContext struct {
 	states []parserState
 	// open child-block braces, innermost last; used to report an unclosed block at its opening brace
 	braces []tokenizer.Token
+	// the most recent node-level slashdash, reported if the input ends before the node it comments out
+	slashdash tokenizer.Token
+	// the node whose (non-ignored) child block closed most recently; a node may have only one such block
+	realBlockClosed *document.Node
 	// current state
 	state parserState
 	// node stack; new nodes are pushed onto this when a child block is encountered; current node is last
@@ -213,9 +217,14 @@ func (c *ParseContext) pushState(newState parserState) {
 }
 
 // pushChildren enters a child block opened by the '{' token open
-func (c *ParseContext) pushChildren(open tokenizer.Token) {
+func (c *ParseContext) pushChildren(open tokenizer.Token) error {
+	// a node has at most one real child block; ignored (slashdashed) blocks may come before or after it
+	if c.ignoreChildren == 0 && c.realBlockClosed != nil && c.realBlockClosed == c.currentNode() {
+		return unexpectedToken(c, open)
+	}
 	c.braces = append(c.braces, open)
 	c.pushState(stateChildren)
+	return nil
 }
 
 func (c *ParseContext) startContinuation() {

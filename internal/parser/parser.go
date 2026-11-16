@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/njreid/gokdl2/document"
@@ -139,6 +140,18 @@ func (p *Parser) parse(c *ParseContext, token tokenizer.Token) error {
 	if c.afterIgnoredChildBlock {
 		switch token.ID {
 		case tokenizer.Whitespace, tokenizer.SingleLineComment, tokenizer.MultiLineComment:
+		case tokenizer.TokenComment:
+			// v2 allows further slashdashed child blocks after an ignored one; the state that follows still has to
+			// see a child block, so the flag stays set until a real block, a newline or the end of input
+			if c.opts.Version != tokenizer.VersionV2 {
+				return unexpectedAfterIgnoredChildBlock(token)
+			}
+		case tokenizer.BraceOpen:
+			// v2: ignored child blocks may precede the node's one real child block
+			if c.opts.Version != tokenizer.VersionV2 || c.realBlockClosed == c.currentNode() {
+				return unexpectedAfterIgnoredChildBlock(token)
+			}
+			c.afterIgnoredChildBlock = false
 		case tokenizer.Newline, tokenizer.EOF, tokenizer.Continuation:
 			if token.ID == tokenizer.Newline || token.ID == tokenizer.EOF || token.ID == tokenizer.Continuation {
 				c.afterIgnoredChildBlock = false
@@ -192,6 +205,20 @@ func (p *Parser) ParseAll(tokens []tokenizer.Token) (*document.Document, error) 
 
 var ErrReenterState = fmt.Errorf("reenter state")
 
+// Finish reports an error if the document ended in the middle of a construct: an unclosed child block, or a
+// node-level slashdash with no node after it. It must be called after the EOF token has been parsed. The error is a
+// *PosError carrying the position of the offending '{' or '/-'.
+func (p *Parser) Finish(c *ParseContext) error {
+	if len(c.braces) > 0 {
+		open := c.braces[len(c.braces)-1]
+		return errorAt(open, errors.New("unclosed child block: unexpected end of input; expected '}'"))
+	}
+	if c.ignoreNextNode {
+		return errorAt(c.slashdash, errors.New("unexpected end of input after '/-'; expected a node"))
+	}
+	return nil
+}
+
 // ParseAllContext parses a slice of tokens using the given context and returns the resulting Document, or a non-nil
 // error on failure
 func (p *Parser) ParseAllContext(c *ParseContext, tokens []tokenizer.Token) (*document.Document, error) {
@@ -215,6 +242,9 @@ func (p *Parser) ParseAllContext(c *ParseContext, tokens []tokenizer.Token) (*do
 	}
 
 	if err := p.Parse(c, eof); err != nil {
+		return nil, p.annotatedError(err, eof, tokens, len(tokens)-1)
+	}
+	if err := p.Finish(c); err != nil {
 		return nil, p.annotatedError(err, eof, tokens, len(tokens)-1)
 	}
 

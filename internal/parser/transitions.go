@@ -87,6 +87,7 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			}
 			c.markIgnoreFromContinuation()
 			c.ignoreNextNode = true
+			c.slashdash = t
 			return nil
 		},
 		tokenizer.Continuation: func(c *ParseContext, t tokenizer.Token) error {
@@ -124,6 +125,7 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			}
 			c.markIgnoreFromContinuation()
 			c.ignoreNextNode = true
+			c.slashdash = t
 			return nil
 		},
 		tokenizer.ParensOpen: func(c *ParseContext, t tokenizer.Token) error {
@@ -172,6 +174,9 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 		tokenizer.BraceClose: func(c *ParseContext, t tokenizer.Token) error {
 			if c.ignoreNextNode {
 				return unexpectedToken(c, t)
+			}
+			if c.ignoreChildren == 0 {
+				c.realBlockClosed = c.currentNode()
 			}
 			if c.ignoreChildren > 0 {
 				c.ignoreChildren--
@@ -282,8 +287,7 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 				c.ignoreNextNode = false
 				c.ignoreChildren++
 			}
-			c.pushChildren(t)
-			return nil
+			return c.pushChildren(t)
 		},
 		tokenizer.Continuation: func(c *ParseContext, t tokenizer.Token) error {
 			c.startContinuation()
@@ -407,8 +411,7 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 				c.ignoreNextArgProp = false
 				c.ignoreChildren++
 			}
-			c.pushChildren(t)
-			return nil
+			return c.pushChildren(t)
 		},
 		tokenizer.ClassTerminator: func(c *ParseContext, t tokenizer.Token) error {
 			if c.continuation {
@@ -514,8 +517,7 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 				c.ignoreChildren++
 			}
 
-			c.pushChildren(t)
-			return nil
+			return c.pushChildren(t)
 		},
 		tokenizer.Equals: func(c *ParseContext, t tokenizer.Token) error {
 			// cannot cannot use a type annotation on a property key
