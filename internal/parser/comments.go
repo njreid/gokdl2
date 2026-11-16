@@ -43,6 +43,8 @@ type inlinePiece struct {
 	// block is true for a slash-dashed child block. Nothing but a comment may follow one on its line (except after a
 	// line continuation), so whatever comes next is started on a continued line.
 	block bool
+	// entry is true for a slash-dashed argument or property
+	entry bool
 }
 
 type inlineBuf struct {
@@ -98,12 +100,13 @@ func (b *inlineBuf) value() []byte {
 }
 
 // trailing appends the pieces to dst as Comment.Trailing text. prevBlock says that dst ends with a slash-dashed child
-// block; the result says whether the new dst does. Nothing follows Trailing on its line, so a // comment is plain text
-// unless a slash-dashed item comes after it, which then has to be on a continued line to stay one.
-func (b *inlineBuf) trailing(dst []byte, prevBlock bool) ([]byte, bool) {
+// block; the result says whether the new dst does. Nothing follows the text on its line, so a // comment is plain text
+// unless a slash-dashed item comes after it, which then has to be on a continued line to stay one; with markAll
+// something (a "{") follows, so every // comment is written as a continued line.
+func (b *inlineBuf) trailing(dst []byte, prevBlock, markAll bool) ([]byte, bool) {
 	for i, p := range b.pieces {
 		text := p.text
-		if p.line && b.slashAfter(i) {
+		if p.line && (markAll || b.slashAfter(i)) {
 			text = append(append([]byte{'\\', ' '}, p.text...), '\n')
 		}
 		if prevBlock {
@@ -148,13 +151,13 @@ func commentText(data []byte, indent int) []byte {
 	}
 	out := make([]byte, 0, len(data))
 	first := true
-	for len(data) > 0 {
+	for done := false; !done; {
 		var line []byte
 		more := false
 		if i := bytes.IndexByte(data, '\n'); i >= 0 {
 			line, data, more = data[:i], data[i+1:], true
 		} else {
-			line, data = data, nil
+			line, data, done = data, nil, true
 		}
 		// a "\r" before a line feed is half of a CRLF pair
 		if n := len(line); more && n > 0 && line[n-1] == '\r' {
@@ -211,9 +214,13 @@ func (c *ParseContext) afterToken(t tokenizer.Token) {
 		switch t.ID {
 		case tokenizer.Continuation:
 			c.capCont = true
-		case tokenizer.Whitespace, tokenizer.Newline, tokenizer.SingleLineComment, tokenizer.MultiLineComment:
+			c.capComment = nil
+		case tokenizer.SingleLineComment:
+			c.capComment = t.Data
+		case tokenizer.Whitespace, tokenizer.Newline, tokenizer.MultiLineComment:
 		default:
 			c.capCont = false
+			c.capComment = nil
 		}
 	}
 	switch t.ID {
@@ -342,19 +349,51 @@ func (c *ParseContext) takeInline() []byte {
 	return r
 }
 
-// flushTrailing makes the pending inline comments the Trailing comment of n.
-func (c *ParseContext) flushTrailing(n *document.Node) {
+// flushPre moves the pending inline comments, which are between the last entry and the "{" of a real child block, to
+// Comment.BeforeBlock of n.
+func (c *ParseContext) flushPre(n *document.Node) {
 	c.mergeInline()
 	if len(c.inl.pieces) == 0 || n == nil {
 		return
 	}
 	cm := c.ensureComment(n)
 	var ends bool
-	cm.Trailing, ends = c.inl.trailing(cm.Trailing, c.trailBlockNode == n)
+	cm.BeforeBlock, ends = c.inl.trailing(cm.BeforeBlock, false, true)
 	if ends {
-		c.trailBlockNode = n
-	} else if c.trailBlockNode == n {
-		c.trailBlockNode = nil
+		c.preBlockEnd = n
+	}
+	c.inl.reset()
+}
+
+// flushPost makes the pending inline comments the comments of n at the end of its line: Comment.Closing if they follow
+// the "}" of its real child block, Comment.Trailing otherwise. Slash-dashed arguments and properties (a KDL v1
+// leniency) are moved before the block, where they are valid.
+func (c *ParseContext) flushPost(n *document.Node) {
+	c.mergeInline()
+	if len(c.inl.pieces) == 0 || n == nil {
+		return
+	}
+	cm := c.ensureComment(n)
+	if c.realBlockClosed != n {
+		cm.Trailing, _ = c.inl.trailing(cm.Trailing, false, false)
+		c.inl.reset()
+		return
+	}
+	var entries, rest inlineBuf
+	for _, p := range c.inl.pieces {
+		if p.entry {
+			entries.add(p)
+		} else {
+			rest.add(p)
+		}
+	}
+	cm.BeforeBlock, _ = entries.trailing(cm.BeforeBlock, c.preBlockEnd == n, true)
+	if len(n.Children) == 0 && len(cm.Inside) == 0 {
+		// the block is empty and is not written, so there is nothing to be after: what follows it goes after what
+		// precedes it (a slash-dashed child block may not directly follow another one)
+		cm.BeforeBlock, _ = rest.trailing(cm.BeforeBlock, c.preBlockEnd == n && len(entries.pieces) == 0, false)
+	} else {
+		cm.Closing, _ = rest.trailing(cm.Closing, false, false)
 	}
 	c.inl.reset()
 }
@@ -415,6 +454,22 @@ func (c *ParseContext) endCapture(include bool, t tokenizer.Token) {
 		// a line continuation that nothing continues must not be written back, it would join the next line
 		raw = trimRightSpace(raw[:len(raw)-1])
 	}
+	if cm := trimRightSpace(c.capComment); !include && len(cm) > 0 && bytes.HasSuffix(raw, cm) {
+		// the capture ends with a // comment on a continued line
+		switch t.ID {
+		case tokenizer.Newline, tokenizer.Semicolon, tokenizer.EOF, tokenizer.BraceClose, tokenizer.Unknown:
+			// nothing continues the line, so the continuation must go or it would join the next line
+			head := trimRightSpace(raw[:len(raw)-len(cm)])
+			for len(head) > 0 && head[len(head)-1] == '\\' {
+				head = trimRightSpace(head[:len(head)-1])
+			}
+			raw = append(append(append([]byte(nil), head...), ' '), cm...)
+		default:
+			// something follows on the next line
+			raw = append(append([]byte(nil), raw...), '\n')
+		}
+	}
+	c.capComment = nil
 	text := commentText(raw, c.capIndent)
 	if string(text) == "/-" {
 		// a slash-dash that slash-dashes nothing, because the end of the block or of the document follows it; the
@@ -424,7 +479,7 @@ func (c *ParseContext) endCapture(include bool, t tokenizer.Token) {
 	if kind == capNode {
 		c.addLinePiece(text, c.capG, true)
 	} else {
-		c.inl.add(inlinePiece{text: text, block: kind == capBlock})
+		c.inl.add(inlinePiece{text: text, block: kind == capBlock, entry: kind == capArg})
 	}
 }
 

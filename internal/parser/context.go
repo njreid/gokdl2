@@ -87,18 +87,20 @@ type ParseContext struct {
 	// line and its distance from the previous content
 	capKind  captureKind
 	capDepth int
+	// preBlockEnd is the node whose BeforeBlock comment ends with a slash-dashed child block
+	preBlockEnd *document.Node
 	// openTrailing is the node that the last comment on the line of a block's '{' was added to
 	openTrailing *document.Node
 	// prevSlashNode is true if the last piece in the line buffer is a slash-dashed node
 	prevSlashNode bool
 	capOwner      *document.Node
 	// capCont is true if the last significant token of the capture is a line continuation
-	capCont   bool
-	capBuf    []byte
-	capIndent int
-	capG      int
-	// trailBlockNode is the node whose Trailing comment currently ends with a slash-dashed child block
-	trailBlockNode *document.Node
+	capCont bool
+	// capComment is the // comment that ends the capture, if the last significant token is one
+	capComment []byte
+	capBuf     []byte
+	capIndent  int
+	capG       int
 	// typeG is the distance of a node's type annotation from the previous content, valid when typeGValid
 	typeG      int
 	typeGValid bool
@@ -237,7 +239,7 @@ func (c *ParseContext) popNode() (*document.Node, error) {
 			// the slash-dashed node ends here; the terminator is not part of it
 			c.endCapture(false, tokenizer.Token{})
 		} else if c.capKind == capNone {
-			c.flushTrailing(node)
+			c.flushPost(node)
 		}
 	}
 	c.node = c.node[0 : len(c.node)-1]
@@ -272,7 +274,7 @@ func (c *ParseContext) pushChildren(open tokenizer.Token) error {
 		return unexpectedToken(c, open)
 	}
 	if c.comments && c.capKind == capNone {
-		c.flushTrailing(c.currentNode())
+		c.flushPre(c.currentNode())
 	}
 	c.braces = append(c.braces, open)
 	c.pushState(stateChildren)
@@ -306,4 +308,13 @@ func (c *ParseContext) popState() (parserState, error) {
 	c.state = c.states[len(c.states)-1]
 	c.states = c.states[0 : len(c.states)-1]
 	return c.state, nil
+}
+
+// checkEntryAfterBlock rejects a slash-dashed argument or property after the real child block of a KDL v2 node: the
+// grammar only allows slash-dashed child blocks there.
+func (c *ParseContext) checkEntryAfterBlock(t tokenizer.Token) error {
+	if c.ignoreNextArgProp && c.opts.Version == tokenizer.VersionV2 && c.realBlockClosed != nil && c.realBlockClosed == c.currentNode() {
+		return errorAt(t, errors.New("a slash-dashed argument or property cannot follow the node's child block"))
+	}
+	return nil
 }

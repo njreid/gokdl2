@@ -99,7 +99,7 @@ func (g *Generator) generateNodes(nodes []*document.Node) error {
 
 // Generate generates the KDL for a Document, and returns a non-nil error on failure
 func (g *Generator) Generate(d *document.Document) error {
-	if g.options.EmitVersionMarker {
+	if g.options.EmitVersionMarker && !hasVersionMarker(d) {
 		v := g.options.Version
 		if v == tokenizer.VersionAuto {
 			v = tokenizer.VersionV1
@@ -126,4 +126,18 @@ func (g *Generator) generateComment(text []byte) error {
 	}
 	_, err := g.w.Write(out)
 	return err
+}
+
+// hasVersionMarker reports whether the document already starts with a "/- kdl-version" marker, which is kept as a
+// comment when the document is parsed with ParseComments.
+func hasVersionMarker(d *document.Document) bool {
+	var text []byte
+	if len(d.Nodes) > 0 {
+		if c := d.Nodes[0].Comment; c != nil {
+			text = c.Before
+		}
+	} else {
+		text = d.Comment
+	}
+	return bytes.HasPrefix(bytes.TrimLeft(text, "\n"), []byte("/- kdl-version"))
 }

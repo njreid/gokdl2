@@ -178,11 +178,13 @@ var commentCases = []commentCase{
 	{name: "trailing block comment on node with children", in: "a 1 { /* x */\n\tb 2\n}\n"},
 	{name: "empty block with comment", in: "a {\n\t// only\n}\n"},
 	{name: "empty block with comment and args", in: "a 1 k=2 { // t\n\t// only\n}\n"},
-	{name: "comment after closing brace", in: "a {\n\tb\n} // c\n", out: "a { // c\n\tb\n}\n"},
+	{name: "comment after closing brace", in: "a {\n\tb\n} // c\n"},
+	{name: "comment before and after block", in: "a 1 /* x */ { // y\n\tb\n} // z\n"},
+	{name: "comment after closing brace of empty block", in: "a { // y\n} // z\n", out: "a // z // y\n"},
 	{name: "block comment multi-line in block", in: "a {\n\t/*\n\t * x\n\t */\n\tb 1\n}\n"},
 	{name: "block comment multi-line blank interior lines", in: "/* a\n\n\n b */\nx\n"},
 	{name: "multi-line trailing comment", in: "a 1 /* x\n   y */\nb 2\n"},
-	{name: "comments in every position", in: "// before\n(t)a /* 1 */ 1 /* 2 */ k=2 /* 3 */ (u)3 /* 4 */ { // 5\n\t// 6\n\tb /* 7 */ 1 // 8\n\t// 9\n} // 10\n// 11\n", out: "// before\n(t)a /* 1 */ 1 /* 3 */ (u)3 /* 2 */ k=2 { /* 4 */ // 5 // 10\n\t// 6\n\tb /* 7 */ 1 // 8\n\t// 9\n}\n// 11\n", v2only: true},
+	{name: "comments in every position", in: "// before\n(t)a /* 1 */ 1 /* 2 */ k=2 /* 3 */ (u)3 /* 4 */ { // 5\n\t// 6\n\tb /* 7 */ 1 // 8\n\t// 9\n} // 10\n// 11\n", out: "// before\n(t)a /* 1 */ 1 /* 3 */ (u)3 /* 2 */ k=2 /* 4 */ { // 5\n\t// 6\n\tb /* 7 */ 1 // 8\n\t// 9\n} // 10\n// 11\n", v2only: true},
 	{name: "comment before property", in: "a /* c */ k=1\n"},
 	{name: "comment before property after arg", in: "a 1 /* c */ k=1\n"},
 	{name: "comment between key and value", in: "a k = /* c */ 1\n", out: "a /* c */ k=1\n", v2only: true},
@@ -218,9 +220,14 @@ var commentCases = []commentCase{
 	{name: "slash-dash only multi-line", in: "/-a {\n\tb\n}\n"},
 	{name: "block comment then node on same line", in: "/* c */ a 1\n", out: "/* c */\na 1\n"},
 	{name: "slash-dashed child block then children", in: "a { b } /-{ c }\n", out: "a {\n\tb\n} /-{ c }\n"},
-	{name: "slash-dashed arg with children", in: "a 1 /-2 { b }\n", out: "a 1 {\n\tb\n} /-2\n"},
+	{name: "slash-dashed arg with children", in: "a 1 /-2 { b }\n", out: "a 1 /-2 {\n\tb\n}\n"},
+	{name: "slash-dashed arg and prop with children", in: "a 1 /-2 /-k=3 { b }\n", out: "a 1 /-2 /-k=3 {\n\tb\n}\n"},
+	{name: "slash-dashed arg with children and comments", in: "a /-2 { // t\n\tb\n} // c\n", out: "a /-2 { // t\n\tb\n} // c\n"},
+	{name: "slash-dashed child block before real block", in: "a 1 /-{ y } { x }\n", out: "a 1 /-{ y } {\n\tx\n}\n", v2only: true},
+	{name: "slash-dashed child blocks around real block", in: "a /-{ y } { x } /-{ z } // c\n", out: "a /-{ y } {\n\tx\n} /-{ z } // c\n", v2only: true},
+	{name: "slash-dashed arg after real block moves before it", in: "a { x } /-2\n", out: "a /-2 {\n\tx\n}\n", v1only: true},
 	{name: "nested slash-dash text in block", in: "a {\n  b 1 /-2 /* x */ 3\n  /-c\n}\n", out: "a {\n\tb 1 /-2 /* x */ 3\n\t/-c\n}\n"},
-	{name: "mix", in: "// top\n\n/-skip 1\n(t)a 1 /* m */ k=v /-x=y // end\n/* block\n   two */\nb { // open\n    /-c 1\n\n    d /-1 { e // e-trail\n    // e-inside\n    } // d-after\n    // b-inside\n}\n\n// eof\n", out: "// top\n\n/-skip 1\n(t)a 1 /* m */ k=v /-x=y // end\n/* block\n   two */\nb { // open\n\t/-c 1\n\n\td {\n\t\te // e-trail\n\t\t// e-inside\n\t} /-1 // d-after\n\t// b-inside\n}\n\n// eof\n", v2only: true},
+	{name: "mix", in: "// top\n\n/-skip 1\n(t)a 1 /* m */ k=v /-x=y // end\n/* block\n   two */\nb { // open\n    /-c 1\n\n    d /-1 { e // e-trail\n    // e-inside\n    } // d-after\n    // b-inside\n}\n\n// eof\n", out: "// top\n\n/-skip 1\n(t)a 1 /* m */ k=v /-x=y // end\n/* block\n   two */\nb { // open\n\t/-c 1\n\n\td /-1 {\n\t\te // e-trail\n\t\t// e-inside\n\t} // d-after\n\t// b-inside\n}\n\n// eof\n", v2only: true},
 }
 
 func TestCommentRoundTrip(t *testing.T) {
@@ -398,11 +405,13 @@ func TestCommentRoundTripCorpus(t *testing.T) {
 	}
 }
 
-// exponentNumber matches numbers with an exponent. Those are formatted lossily (and not idempotently, "+0e0" becomes
-// "0.000000" and then "0.0") when they do not fit a float64, which is a number-formatting quirk unrelated to comments.
-var identBackslash = regexp.MustCompile(`[^\s"\\#/*;{}()=]\\`)
+// hugeExponent matches numbers that are too big for a float64 (a long exponent, or 300 digits). Those are parsed as
+// big.Float with a 64-bit mantissa and are not written back with the same value ("A 1e2781" is generated as
+// "A 1E+2782"), a number-formatting problem that has nothing to do with comments.
+var hugeExponent = regexp.MustCompile(`[eE][+-]?[0-9_]{3,}|[0-9]{300,}`)
 
-var exponentNumber = regexp.MustCompile(`[0-9_.][eE][+-]?[0-9]`)
+// identBackslash matches a backslash right after a bare identifier.
+var identBackslash = regexp.MustCompile(`[^\s"\\#/*;{}()=]\\`)
 
 // FuzzCommentRoundTrip asserts invariants 1 to 3 for any input that parses with comments on.
 func FuzzCommentRoundTrip(f *testing.F) {
@@ -413,24 +422,107 @@ func FuzzCommentRoundTrip(f *testing.F) {
 		// a backslash right after a bare identifier is part of the identifier in v1, so "/-A\\ \\" is a node named
 		// "A\\" followed by a line continuation, which cannot be told apart from "/-A" and a continuation once written
 		// back
+		if hugeExponent.MatchString(src) {
+			return
+		}
 		if identBackslash.MatchString(src) || strings.Contains(src, "\\\\") {
 			return
 		}
-		// see exponentNumber; resolving a number with a huge exponent also takes forever
-		if exponentNumber.MatchString(src) {
-			return
-		}
 		if _, err := commentParse(src, ParseVersionAuto, true); err != nil {
-			return
-		}
-		// The parser accepts some unterminated input when the end of input ends the last node, such as "a {b" with
-		// the "}" missing; the same input with a newline appended is then rejected. That is a parser quirk that
-		// has nothing to do with comments, so such input is not interesting here.
-		if _, err := commentParse(src+"\n", ParseVersionAuto, true); err != nil {
 			return
 		}
 		if _, err := checkCommentRoundTrip(src, ParseVersionAuto); err != nil {
 			t.Fatalf("%v\ninput: %q", err, src)
 		}
 	})
+}
+
+// TestCommentEntriesNeverAfterBlock checks that slash-dashed arguments and properties are written before the "{", and
+// that the parser rejects them after the block in v2.
+func TestCommentEntriesNeverAfterBlock(t *testing.T) {
+	for _, src := range []string{"a { x } /-2", "a { x } /-k=2", "a { x } /-(t)2", "a {\n x\n} /-2 // c"} {
+		if _, err := commentParse(src, ParseVersionV2, true); err == nil {
+			t.Errorf("v2 %q: expected an error", src)
+		}
+		if _, err := commentParse(src, ParseVersionV2, false); err == nil {
+			t.Errorf("v2 %q without comments: expected an error", src)
+		}
+	}
+	for _, src := range []string{"a { x } /-{ y }", "a /-{ y } { x }", "a /-{ y } { x } /-{ z }", "a /-2 { x }"} {
+		if _, err := commentParse(src, ParseVersionV2, true); err != nil {
+			t.Errorf("v2 %q: %v", src, err)
+		}
+	}
+	// v1 accepts them after the block, and the generator writes them before it
+	doc, err := commentParse("a { x } /-2 // c", ParseVersionV1, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, err := commentGenerate(doc, tokenizer.VersionV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "a /-2 { // c\n\tx\n}\n"; g != "a /-2 {\n\tx\n} // c\n" && g != want {
+		t.Errorf("got %q", g)
+	}
+	// the writer never puts entries after a closing brace, whatever the comment fields hold
+	n := doc.Nodes[0]
+	n.Comment = &document.Comment{BeforeBlock: []byte("/-3 /* b */"), Trailing: []byte("// t"), Closing: []byte("/-{ z } // c")}
+	g, err = commentGenerate(doc, tokenizer.VersionV2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "a /-3 /* b */ { // t\n\tx\n} /-{ z } // c\n"; g != want {
+		t.Errorf("got %q want %q", g, want)
+	}
+}
+
+// TestCommentClosing checks the Closing and BeforeBlock fields.
+func TestCommentClosing(t *testing.T) {
+	doc, err := commentParse("a 1 /* x */ { // t\n\tb\n} // end\n", ParseVersionV2, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := doc.Nodes[0].Comment
+	if string(c.BeforeBlock) != "/* x */" || string(c.Trailing) != "// t" || string(c.Closing) != "// end" {
+		t.Errorf("%q %q %q", c.BeforeBlock, c.Trailing, c.Closing)
+	}
+	for src, want := range map[string]string{
+		"a {\n  x\n} // end":     "a {\n\tx\n} // end\n",
+		"a { x } /* a */ // end": "a {\n\tx\n} /* a */ // end\n",
+	} {
+		g, err := checkCommentRoundTrip(src, ParseVersionV2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if g != want {
+			t.Errorf("%q: got %q want %q", src, g, want)
+		}
+	}
+}
+
+// TestEmitVersionMarkerOnce checks that a version marker that was kept as a comment is not written a second time.
+func TestEmitVersionMarkerOnce(t *testing.T) {
+	for _, src := range []string{"/- kdl-version 2\na 1\n", "\n/- kdl-version 2\n// c\na 1\n"} {
+		doc, err := commentParse(src, ParseVersionAuto, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var b bytes.Buffer
+		if err := GenerateWithOptions(doc, &b, GenerateOptions{Indent: "\t", Version: tokenizer.VersionV2, EmitVersionMarker: true}); err != nil {
+			t.Fatal(err)
+		}
+		if n := strings.Count(b.String(), "kdl-version"); n != 1 {
+			t.Errorf("%q: %d markers in %q", src, n, b.String())
+		}
+	}
+	// without the marker in the document, it is added
+	doc, _ := commentParse("// c\na 1\n", ParseVersionV2, true)
+	var b bytes.Buffer
+	if err := GenerateWithOptions(doc, &b, GenerateOptions{Indent: "\t", Version: tokenizer.VersionV2, EmitVersionMarker: true}); err != nil {
+		t.Fatal(err)
+	}
+	if b.String() != "/- kdl-version 2\n// c\na 1\n" {
+		t.Errorf("got %q", b.String())
+	}
 }

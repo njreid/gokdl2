@@ -358,6 +358,9 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			return nil
 		},
 		tokenizer.ParensOpen: func(c *ParseContext, t tokenizer.Token) error {
+			if err := c.checkEntryAfterBlock(t); err != nil {
+				return err
+			}
 			// a ( inside a node declaration is the beginning of a type annotation for a value; only one is allowed
 			if c.typeAnnot.Valid() {
 				return unexpectedToken(c, t)
@@ -366,6 +369,9 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			return nil
 		},
 		tokenizer.BareIdentifier: func(c *ParseContext, t tokenizer.Token) error {
+			if err := c.checkEntryAfterBlock(t); err != nil {
+				return err
+			}
 			if c.opts.RelaxedNonCompliant.Permit(relaxed.NGINXSyntax) || c.opts.Version == tokenizer.VersionV2 {
 				// a bare identifier inside a node declaration in nginx syntax mode or KDL v2 is either an argument or a property name; save it
 				c.ident = t
@@ -388,6 +394,9 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 		},
 
 		tokenizer.SuffixedDecimal: func(c *ParseContext, t tokenizer.Token) error {
+			if err := c.checkEntryAfterBlock(t); err != nil {
+				return err
+			}
 			// a suffixed identifier inside a node declaration can only be an argument
 			c.typeAnnot.Clear()
 			c.ident.Clear()
@@ -403,12 +412,18 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			return nil
 		},
 		tokenizer.ClassString: func(c *ParseContext, t tokenizer.Token) error {
+			if err := c.checkEntryAfterBlock(t); err != nil {
+				return err
+			}
 			// a string value inside a node declaration is either an argument or a property name; save it
 			c.ident = t
 			c.state = stateArgProp
 			return nil
 		},
 		tokenizer.ClassNonStringValue: func(c *ParseContext, t tokenizer.Token) error {
+			if err := c.checkEntryAfterBlock(t); err != nil {
+				return err
+			}
 			// a non-string value inside a node declaration is always an argument, but we save it just to make sure it isn't followed by an equal sign
 			c.ident = t
 			c.state = stateArgProp

@@ -210,7 +210,7 @@ func (p *Parser) Parse(c *ParseContext, token tokenizer.Token) error {
 				kind, owner := c.capKind, c.capOwner
 				c.endCapture(false, token)
 				if kind != capNode {
-					c.flushTrailing(owner)
+					c.flushPost(owner)
 				}
 			}
 			c.flushEOF()

@@ -1,7 +1,6 @@
 package document
 
 import (
-	"bytes"
 	"io"
 	"strings"
 	"sync"
@@ -26,15 +25,22 @@ type Comment struct {
 	// After is the comment lines after the node. The parser uses it only for the comments after the last top-level
 	// node at the end of the document. The generator writes it on lines of its own after the node's last line.
 	After []byte
-	// Trailing is the comment text on the same line as the node, after its last entry and before the end of the
-	// line, such as "// x" or "/* x */" (several are separated by a space), and slash-dashed arguments, properties
-	// and child blocks that no entry follows. A comment on the line of the "{" that opens the child block, or after
-	// the "}" that closes it, is Trailing as well. The generator writes it at the end of the node's first line,
-	// separated by one space: after the last entry, or after " {" if the node has a child block, as in "a 1 { // x".
-	// If it contains a slash-dash it is written after the closing "}" instead (the only place in which slash-dashed
-	// arguments and child blocks are valid after a child block). When AddSemicolons is set, a node with a Trailing
-	// comment is not given a semicolon.
+	// Trailing is the comment text on the node's first line, after its last entry, before the end of the line, such
+	// as "// x" or "/* x */" (several are separated by a space). If the node has a child block, it is the text after
+	// the "{" on the same line, as in "a 1 { // x". It is also where the slash-dashed arguments, properties and child
+	// blocks go that nothing follows, in a node without a child block. The generator writes it at the end of the first
+	// line, separated by one space: after the last entry, or after " {" if the node has a child block. When
+	// AddSemicolons is set, a node with comments at the end of its line is not given a semicolon.
 	Trailing []byte
+	// BeforeBlock is, for a node that has a child block, the text between its last entry and the "{": block comments,
+	// and slash-dashed arguments, properties and child blocks (in KDL v2, where those may come before the real
+	// block). The generator writes it before " {", separated by one space. If the node has no child block it is
+	// written before Trailing, so entries are never written after a "}".
+	BeforeBlock []byte
+	// Closing is the text on the same line after the "}" that closes the node's child block: comments, and
+	// slash-dashed child blocks, which are valid before and after the real block. The generator writes it after the
+	// "}", separated by one space. Slash-dashed arguments and properties are not valid there, and are never put in it.
+	Closing []byte
 	// Inside is the comment lines at the end of the node's child block, after the last child and before "}", also
 	// for a block without children ("a {\n // only\n}"). The generator writes them indented at child depth just
 	// before the "}", and writes a block for Inside even if the node has no children.
@@ -386,23 +392,29 @@ func (n *Node) WriteToOptions(w io.Writer, opts NodeWriteOptions) (int64, error)
 		buf = n.Properties.appendToComments(buf, opts.IgnoreFlags, opts.Version, cw)
 	}
 
-	var trailing, inside, after []byte
+	var trailing, before, closing, inside, after []byte
 	if n.Comment != nil {
 		after = n.Comment.After
 		if inline {
 			trailing = n.Comment.Trailing
+			before = n.Comment.BeforeBlock
+			closing = n.Comment.Closing
 			inside = n.Comment.Inside
 		}
 	}
-	// a slash-dash is only valid after the closing brace of a child block, so a Trailing comment that has one goes there
-	slashed := bytes.Contains(trailing, []byte("/-"))
 	hasBlock := len(n.Children) > 0 || len(inside) > 0
+	space := func(text []byte) {
+		buf = append(buf, ' ')
+		buf = appendInlineComment(buf, text, opts.Indent, commentDepth)
+	}
 
+	if len(before) > 0 {
+		space(before)
+	}
 	if hasBlock {
 		buf = append(buf, ' ', '{')
-		if len(trailing) > 0 && !slashed {
-			buf = append(buf, ' ')
-			buf = appendInlineComment(buf, trailing, opts.Indent, commentDepth)
+		if len(trailing) > 0 {
+			space(trailing)
 		}
 		buf = append(buf, '\n')
 		flush()
@@ -427,13 +439,17 @@ func (n *Node) WriteToOptions(w io.Writer, opts NodeWriteOptions) (int64, error)
 			buf = appendIndent(buf, opts.Depth)
 		}
 		buf = append(buf, '}')
-		if len(trailing) > 0 && slashed {
-			buf = append(buf, ' ')
-			buf = appendInlineComment(buf, trailing, opts.Indent, commentDepth)
+		if len(closing) > 0 {
+			space(closing)
 		}
-	} else if len(trailing) > 0 {
-		buf = append(buf, ' ')
-		buf = appendInlineComment(buf, trailing, opts.Indent, commentDepth)
+	} else if len(closing) > 0 || len(trailing) > 0 || len(before) > 0 {
+		// no block is written, so what would follow it follows the entries; Trailing is last, a // comment ends it
+		if len(closing) > 0 {
+			space(closing)
+		}
+		if len(trailing) > 0 {
+			space(trailing)
+		}
 	} else if opts.AddSemicolons {
 		buf = append(buf, ';')
 	}
