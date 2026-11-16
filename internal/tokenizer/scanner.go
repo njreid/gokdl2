@@ -691,7 +691,11 @@ func (s *Scanner) readNext() (Token, error) {
 		token.Data = s.copyInput(1)
 		s.skip()
 	case ',':
-		return token, fmt.Errorf("unexpected character ','")
+		// a comma is an identifier character in KDL v2, but not in v1
+		if s.Version != VersionV2 {
+			return token, fmt.Errorf("unexpected character ','")
+		}
+		ignore = false
 	case '\\':
 		if s.RelaxedNonCompliant.Permit(relaxed.NGINXSyntax) {
 			ignore = false

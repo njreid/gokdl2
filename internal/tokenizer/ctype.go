@@ -1,6 +1,8 @@
 package tokenizer
 
 import (
+	"strings"
+
 	"github.com/njreid/gokdl2/relaxed"
 )
 
@@ -112,10 +114,15 @@ func isBareIdentifierCharVersion(c rune, r relaxed.Flags, first bool, v Version)
 	if isDisallowedV2Rune(c) {
 		return false
 	}
+	// U+FEFF is only allowed as a byte order mark at the very start of a document (in v1 the grammar treats it as
+	// whitespace), so it is never part of an identifier
+	if c == 0xFEFF {
+		return false
+	}
 
 	if v == VersionV2 {
 		switch c {
-		case '(', ')', '{', '}', '[', ']', '/', '\\', '"', '#', ';', '=', '\uFEFF':
+		case '(', ')', '{', '}', '[', ']', '/', '\\', '"', '#', ';', '=':
 			return false
 		}
 		if first && isDigit(c) {
@@ -150,6 +157,26 @@ func IsBareIdentifier(s string, rf relaxed.Flags) bool {
 func IsBareIdentifierVersion(s string, rf relaxed.Flags, v Version) bool {
 	if len(s) == 0 {
 		return false
+	}
+
+	// gokdl2 reads a leading backtick as the start of an expression string (an extension to KDL), in either version
+	if s[0] == '`' {
+		return false
+	}
+
+	if v != VersionV2 {
+		// KDL v1: the keywords are not identifiers, and a sign followed by a digit starts a number
+		switch s {
+		case "true", "false", "null":
+			return false
+		}
+		if len(s) > 1 && isSign(rune(s[0])) && isDigit(rune(s[1])) {
+			return false
+		}
+		// r# starts a v1 raw string (r"... cannot occur, since '"' is not an identifier character)
+		if strings.HasPrefix(s, "r#") {
+			return false
+		}
 	}
 
 	if v == VersionV2 {
