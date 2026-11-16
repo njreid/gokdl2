@@ -50,3 +50,35 @@ func TestHugeExponentNumbers(t *testing.T) {
 		t.Errorf("parsing and generating huge exponents took %v; something is converting them digit by digit", d)
 	}
 }
+
+// Generating a huge number and parsing it again must give back exactly the same value, pass after pass: the
+// formatter writes the shortest mantissa that parses back to the identical big.Float. Before that, "1e2781" was
+// written as "1E+2782" and some values drifted by one unit in the last place on every pass.
+func TestHugeExponentRoundTripIsStable(t *testing.T) {
+	big700 := "1001022" + strings.Repeat("2", 600) + strings.Repeat("0", 93) + ".0"
+	for _, src := range []string{"1e2781", "120e-10_1000", big700, "1e1024", "9.999999999999999e1500", "-7.25e-5000", "6.02214076e23000"} {
+		gen := func(s string) string {
+			doc, err := ParseWithOptions(strings.NewReader("A "+s), ParseOptions{Version: ParseVersionV2})
+			if err != nil {
+				t.Fatalf("%.30s: %v", s, err)
+			}
+			var b strings.Builder
+			if err := GenerateWithOptions(doc, &b, GenerateOptions{Version: 2}); err != nil {
+				t.Fatal(err)
+			}
+			return strings.TrimPrefix(strings.TrimSpace(b.String()), "A ")
+		}
+		g1 := gen(src)
+		g2 := gen(g1)
+		g3 := gen(g2)
+		if g1 != g2 || g2 != g3 {
+			t.Errorf("%.30s: not stable: %s -> %s -> %s", src, g1, g2, g3)
+		}
+	}
+	if got := func() string {
+		doc, _ := ParseWithOptions(strings.NewReader("A 1e2781"), ParseOptions{Version: ParseVersionV2})
+		return doc.Nodes[0].Arguments[0].FormattedStringV2()
+	}(); got != "1E+2781" {
+		t.Errorf("1e2781 formatted as %s", got)
+	}
+}

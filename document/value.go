@@ -542,45 +542,61 @@ func pow10BigFloat(n int64, prec uint) *big.Float {
 }
 
 // appendHugeBigFloat appends x, a finite non-zero big.Float with a very large exponent, in E notation, in time that
-// does not depend on the exponent: it scales x into [1, 10) by a power of ten and formats that mantissa as a float64.
+// does not depend on the exponent. It scales x into [1, 10) by a power of ten computed at high precision, then writes
+// the shortest mantissa (at most 17 significant digits) that parseBigFloat turns back into exactly x, so generated
+// numbers round-trip.
 func appendHugeBigFloat(b []byte, x *big.Float) []byte {
 	const prec = 128
 	abs := new(big.Float).SetPrec(prec).Abs(x)
-	// estimate the decimal exponent from the binary one, then correct it after scaling
+	one := new(big.Float).SetPrec(prec).SetInt64(1)
+	ten := new(big.Float).SetPrec(prec).SetInt64(10)
+
+	// estimate the decimal exponent from the binary one, then correct it against the exact scaled value
 	e10 := int64(math.Floor(float64(abs.MantExp(nil)-1) * math.Log10(2)))
 	scaled := new(big.Float).SetPrec(prec)
-	for i := 0; i < 3; i++ {
+	scale := func() {
 		if e10 >= 0 {
 			scaled.Quo(abs, pow10BigFloat(e10, prec))
 		} else {
 			scaled.Mul(abs, pow10BigFloat(-e10, prec))
 		}
-		m, _ := scaled.Float64()
+	}
+	scale()
+	for i := 0; i < 8; i++ {
 		switch {
-		case m >= 10:
+		case scaled.Cmp(ten) >= 0:
 			e10++
-		case m < 1:
+		case scaled.Cmp(one) < 0:
 			e10--
 		default:
-			i = 3
+			i = 8
+			continue
+		}
+		scale()
+	}
+
+	sign := ""
+	if x.Sign() < 0 {
+		sign = "-"
+	}
+	var candidate string
+	for digits := 1; digits <= 17; digits++ {
+		mant := scaled.Text('f', digits-1)
+		exp := e10
+		if strings.HasPrefix(mant, "10") {
+			// rounding carried into a new digit: 9.99… became 10.0…
+			mant = new(big.Float).SetPrec(prec).Quo(scaled, ten).Text('f', digits-1)
+			exp++
+		}
+		candidate = sign + mant + "E" + strconv.FormatInt(exp, 10)
+		if exp >= 0 {
+			candidate = sign + mant + "E+" + strconv.FormatInt(exp, 10)
+		}
+		if back, err := parseBigFloat(candidate); err == nil && back.Cmp(x) == 0 {
+			break
 		}
 	}
-	m, _ := scaled.Float64()
-	if m >= 10 {
-		// rounding pushed the mantissa to 10
-		m /= 10
-		e10++
-	}
-	digits := strconv.FormatFloat(m, 'f', -1, 64)
-	if x.Sign() < 0 {
-		b = append(b, '-')
-	}
-	b = append(b, digits...)
-	b = append(b, 'E')
-	if e10 >= 0 {
-		b = append(b, '+')
-	}
-	return strconv.AppendInt(b, e10, 10)
+	return append(b, candidate...)
 }
 
 // parseBigFloat parses a base-10 floating point string that is outside the float64 range, at 53 bits of precision,
@@ -674,7 +690,19 @@ func parseNumber(b []byte, base int) (interface{}, error) {
 		// just returns 0, which is wrong. So if ParseFloat returns 0.0 and b contains a nonzero coefficient, we reparse
 		// as a big.Float.
 		if errors.Is(err, strconv.ErrRange) || (err == nil && f == 0.0 && isNonzeroSciNot(b)) {
-			v, err = parseBigFloat(bstr)
+			var bf *big.Float
+			bf, err = parseBigFloat(bstr)
+			switch {
+			case err != nil:
+			case bf.IsInf():
+				// overflow is an infinity, like #inf, and a float64 so that it compares equal once written back
+				v = math.Inf(bf.Sign())
+			case bf.Sign() == 0:
+				// underflow is a (signed) zero, likewise
+				v = signedZero(bf.Signbit())
+			default:
+				v = bf
+			}
 		} else {
 			v = f
 		}
@@ -825,4 +853,12 @@ func ValueFromTokenInto(v *Value, t tokenizer.Token) error {
 	}
 
 	return err
+}
+
+// signedZero returns -0.0 if negative is true, otherwise 0.0.
+func signedZero(negative bool) float64 {
+	if negative {
+		return math.Copysign(0, -1)
+	}
+	return 0
 }

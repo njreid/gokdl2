@@ -178,12 +178,27 @@ func (p *Parser) parse(c *ParseContext, token tokenizer.Token) error {
 		case tokenizer.Whitespace, tokenizer.SingleLineComment, tokenizer.MultiLineComment:
 			// continue waiting for the first token of the next (continued) line
 		default:
+			// a line continuation must end its line: only whitespace and comments may follow it before the newline
+			if !c.continuationNewlineSeen && token.ID != tokenizer.EOF {
+				return errorAt(token, errors.New("unexpected "+tokenLabel(token.ID)+" after '\\'; a line continuation must be followed by a newline"))
+			}
 			// this is the first token of the next (continued) line
 			c.stopContinuation()
 			c.justContinuedLine = true
 		}
 	} else if !isTriviaToken(token.ID) {
 		c.justContinuedLine = false
+	}
+
+	// arguments, properties and type annotations cannot follow a node's child block (ignored child blocks can)
+	if c.realBlockClosed != nil && c.realBlockClosed == c.currentNode() && !c.ignoreNextArgProp {
+		switch c.state {
+		case stateNode, stateNodeParams, stateArgProp:
+			if token.ID == tokenizer.ParensOpen || (isValueLikeToken(token.ID) && token.ID != tokenizer.BraceClose) ||
+				token.ID == tokenizer.ExpressionString {
+				return errorAt(token, errors.New("unexpected "+tokenLabel(token.ID)+"; arguments and properties cannot follow the node's child block"))
+			}
+		}
 	}
 
 	handler := lookupTransition(c.state, token.ID)

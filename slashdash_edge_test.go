@@ -90,3 +90,54 @@ func TestEndOfInputErrorPositions(t *testing.T) {
 		}
 	}
 }
+
+// A line continuation must be followed only by whitespace and comments before its newline, and a node's child
+// block must come after all of its arguments and properties.
+func TestContinuationAndEntriesAfterBlock(t *testing.T) {
+	tests := []struct {
+		name, src, want string // want "" means a parse error is expected
+	}{
+		{"value after continuation", "a \\ 1", ""},
+		{"value glued to continuation", "a \\1", ""},
+		{"values after continuation", "a 1 \\ 2 3", ""},
+		{"block comment then value after continuation", "a \\ /* c */ 1", ""},
+		{"continuation then newline", "a \\\n 1", "a 1\n"},
+		{"continuation, line comment, newline", "a \\ // c\n 1", "a 1\n"},
+		{"continuation, block comment, newline", "a \\ /* c */\n 1", "a 1\n"},
+		{"continuation at end of input", "a 1 \\", "a 1\n"},
+		{"argument after child block", "a { b } c", ""},
+		{"property after child block", "a { b } k=1", ""},
+		{"typed argument after child block", "a { b } (t)1", ""},
+		{"argument after child block via continuation", "a { b } \\\n c", ""},
+		{"ignored block after child block", "a { b } /-{ c }", "a {\n\tb\n}\n"},
+		{"argument before child block", "a c { b }", "a c {\n\tb\n}\n"},
+	}
+	for _, tt := range tests {
+		for _, v := range []ParseVersion{ParseVersionV2, ParseVersionV1} {
+			if v == ParseVersionV1 && strings.Contains(tt.src, "/-{") {
+				continue
+			}
+			src := tt.src
+			if v == ParseVersionV1 {
+				// v1 has no bare identifier arguments
+				src = strings.NewReplacer(" c {", " \"c\" {", "} c", "} \"c\"", "\n c", "\n \"c\"").Replace(src)
+			}
+			got, err := genV2(t, src, v)
+			if tt.want == "" {
+				if err == nil {
+					t.Errorf("v%d %s (%q): expected an error, got %q", v, tt.name, src, got)
+				}
+				continue
+			}
+			want := tt.want
+			if v == ParseVersionV1 {
+				want = strings.ReplaceAll(want, "a c {", "a \"c\" {")
+			}
+			if err != nil {
+				t.Errorf("v%d %s (%q): %v", v, tt.name, src, err)
+			} else if got != want {
+				t.Errorf("v%d %s (%q): got %q, want %q", v, tt.name, src, got, want)
+			}
+		}
+	}
+}

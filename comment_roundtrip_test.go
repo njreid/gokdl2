@@ -405,11 +405,6 @@ func TestCommentRoundTripCorpus(t *testing.T) {
 	}
 }
 
-// hugeExponent matches numbers that are too big for a float64 (a long exponent, or 300 digits). Those are parsed as
-// big.Float with a 64-bit mantissa and are not written back with the same value ("A 1e2781" is generated as
-// "A 1E+2782"), a number-formatting problem that has nothing to do with comments.
-var hugeExponent = regexp.MustCompile(`[eE][+-]?[0-9_]{3,}|[0-9]{300,}`)
-
 // identBackslash matches a backslash right after a bare identifier.
 var identBackslash = regexp.MustCompile(`[^\s"\\#/*;{}()=]\\`)
 
@@ -422,9 +417,6 @@ func FuzzCommentRoundTrip(f *testing.F) {
 		// a backslash right after a bare identifier is part of the identifier in v1, so "/-A\\ \\" is a node named
 		// "A\\" followed by a line continuation, which cannot be told apart from "/-A" and a continuation once written
 		// back
-		if hugeExponent.MatchString(src) {
-			return
-		}
 		if identBackslash.MatchString(src) || strings.Contains(src, "\\\\") {
 			return
 		}
