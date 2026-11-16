@@ -400,6 +400,8 @@ func TestCommentRoundTripCorpus(t *testing.T) {
 
 // exponentNumber matches numbers with an exponent. Those are formatted lossily (and not idempotently, "+0e0" becomes
 // "0.000000" and then "0.0") when they do not fit a float64, which is a number-formatting quirk unrelated to comments.
+var identBackslash = regexp.MustCompile(`[^\s"\\#/*;{}()=]\\`)
+
 var exponentNumber = regexp.MustCompile(`[0-9_.][eE][+-]?[0-9]`)
 
 // FuzzCommentRoundTrip asserts invariants 1 to 3 for any input that parses with comments on.
@@ -408,6 +410,12 @@ func FuzzCommentRoundTrip(f *testing.F) {
 		f.Add(s)
 	}
 	f.Fuzz(func(t *testing.T, src string) {
+		// a backslash right after a bare identifier is part of the identifier in v1, so "/-A\\ \\" is a node named
+		// "A\\" followed by a line continuation, which cannot be told apart from "/-A" and a continuation once written
+		// back
+		if identBackslash.MatchString(src) || strings.Contains(src, "\\\\") {
+			return
+		}
 		// see exponentNumber; resolving a number with a huge exponent also takes forever
 		if exponentNumber.MatchString(src) {
 			return

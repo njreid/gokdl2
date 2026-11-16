@@ -85,9 +85,15 @@ type ParseContext struct {
 	inl, inl2 inlineBuf
 	// slash-dash capture in progress: kind, depth of the node stack when it began, raw text, the indentation of its
 	// line and its distance from the previous content
-	capKind   captureKind
-	capDepth  int
-	capOwner  *document.Node
+	capKind  captureKind
+	capDepth int
+	// openTrailing is the node that the last comment on the line of a block's '{' was added to
+	openTrailing *document.Node
+	// prevSlashNode is true if the last piece in the line buffer is a slash-dashed node
+	prevSlashNode bool
+	capOwner      *document.Node
+	// capCont is true if the last significant token of the capture is a line continuation
+	capCont   bool
 	capBuf    []byte
 	capIndent int
 	capG      int

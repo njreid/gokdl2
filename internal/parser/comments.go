@@ -208,6 +208,13 @@ func (c *ParseContext) lineRel(startLine int) int {
 func (c *ParseContext) afterToken(t tokenizer.Token) {
 	if c.capKind != capNone {
 		c.capBuf = append(c.capBuf, t.Data...)
+		switch t.ID {
+		case tokenizer.Continuation:
+			c.capCont = true
+		case tokenizer.Whitespace, tokenizer.Newline, tokenizer.SingleLineComment, tokenizer.MultiLineComment:
+		default:
+			c.capCont = false
+		}
 	}
 	switch t.ID {
 	case tokenizer.Newline:
@@ -238,13 +245,16 @@ func (c *ParseContext) afterToken(t tokenizer.Token) {
 
 // addLinePiece appends a piece to the line buffer, separated from the previous piece according to how far apart they
 // were in the source.
-func (c *ParseContext) addLinePiece(text []byte, g int) {
+func (c *ParseContext) addLinePiece(text []byte, g int, slashNode bool) {
 	if c.comment.Len() == 0 {
 		if g >= 1 {
 			c.comment.WriteByte('\n')
 		}
 	} else {
 		switch {
+		case g < 0 && (slashNode || c.prevSlashNode):
+			// a slash-dashed node and what follows it on its line would read as arguments of it
+			c.comment.WriteByte('\n')
 		case g < 0:
 			c.comment.WriteByte(' ')
 		case g == 0:
@@ -254,6 +264,7 @@ func (c *ParseContext) addLinePiece(text []byte, g int) {
 		}
 	}
 	c.comment.Write(text)
+	c.prevSlashNode = slashNode
 }
 
 func (c *ParseContext) ensureComment(n *document.Node) *document.Comment {
@@ -284,15 +295,19 @@ func (c *ParseContext) noteComment(t tokenizer.Token) {
 
 func (c *ParseContext) noteLineComment(t tokenizer.Token, inBlock bool) {
 	text := commentText(t.Data, c.lineIndent)
-	if inBlock && c.comment.Len() == 0 && len(c.braces) > 0 && c.braces[len(c.braces)-1].Line == t.Line {
-		// a comment on the line of the block's '{' belongs to the node that owns the block
-		if owner := c.currentNode(); owner != nil && len(owner.Children) == 0 {
+	if inBlock && c.comment.Len() == 0 && len(c.braces) > 0 {
+		// a comment on the line of the block's '{' (or on the line where such a comment ends) belongs to the node that
+		// owns the block
+		owner := c.currentNode()
+		onLine := c.braces[len(c.braces)-1].Line == t.Line || (owner == c.openTrailing && t.Line == c.prevEnd)
+		if owner != nil && onLine && len(owner.Children) == 0 {
 			cm := c.ensureComment(owner)
 			cm.Trailing = appendJoined(cm.Trailing, text)
+			c.openTrailing = owner
 			return
 		}
 	}
-	c.addLinePiece(text, c.lineRel(t.Line))
+	c.addLinePiece(text, c.lineRel(t.Line), false)
 }
 
 func (c *ParseContext) noteInlineComment(t tokenizer.Token) {
@@ -381,6 +396,7 @@ func (c *ParseContext) startCapture(kind captureKind, t tokenizer.Token) {
 	c.capKind = kind
 	c.capDepth = len(c.node)
 	c.capOwner = c.currentNode()
+	c.capCont = false
 	c.capBuf = c.capBuf[:0]
 	c.capIndent = c.lineIndent
 	c.capG = c.lineRel(t.Line)
@@ -394,14 +410,19 @@ func (c *ParseContext) endCapture(include bool, t tokenizer.Token) {
 	}
 	kind := c.capKind
 	c.capKind = capNone
-	text := commentText(trimRightSpace(c.capBuf), c.capIndent)
+	raw := trimRightSpace(c.capBuf)
+	for c.capCont && !include && len(raw) > 0 && raw[len(raw)-1] == '\\' {
+		// a line continuation that nothing continues must not be written back, it would join the next line
+		raw = trimRightSpace(raw[:len(raw)-1])
+	}
+	text := commentText(raw, c.capIndent)
 	if string(text) == "/-" {
 		// a slash-dash that slash-dashes nothing, because the end of the block or of the document follows it; the
 		// parser tolerates that, but it cannot be written back
 		return
 	}
 	if kind == capNode {
-		c.addLinePiece(text, c.capG)
+		c.addLinePiece(text, c.capG, true)
 	} else {
 		c.inl.add(inlinePiece{text: text, block: kind == capBlock})
 	}
