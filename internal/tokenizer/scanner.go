@@ -613,6 +613,10 @@ func (s *Scanner) readNext() (Token, error) {
 
 	case '/':
 		_, c, err := s.peekTwo()
+		if err == io.EOF {
+			// a lone '/' at the end of the input is not a comment
+			return token, errUnexpectedSlash
+		}
 		if err != nil {
 			return token, err
 		}
@@ -715,7 +719,7 @@ func (s *Scanner) readNext() (Token, error) {
 			s.log("peeked c2", "c2", c2, "err", err)
 		}
 		if err != nil {
-			if err == io.EOF && c != '?' {
+			if err == io.EOF {
 				if token.ID, token.Data, err = s.readIdentifier(); err != nil {
 					return token, err
 				}
@@ -750,7 +754,7 @@ func (s *Scanner) readNext() (Token, error) {
 
 	case '0':
 		s.log("reading value starting with 0")
-		if _, c, err := s.peekTwo(); err != nil {
+		if _, c, err := s.peekTwo(); err != nil && err != io.EOF {
 			return token, err
 		} else {
 			switch c {
@@ -1102,6 +1106,10 @@ func (s *Scanner) Scan() bool {
 	if s.token, s.err = s.readNext(); s.err == nil {
 		s.noteToken(s.token)
 		return true
+	} else if s.err == io.EOF && len(s.input) > 0 {
+		// readNext ran out of lookahead while input remains: never drop the unread bytes silently
+		s.err = s.annotatedError(fmt.Errorf("unexpected end of input"), s.token)
+		return false
 	} else if s.err == io.EOF {
 		s.token = eofToken
 		s.token.Line = s.line

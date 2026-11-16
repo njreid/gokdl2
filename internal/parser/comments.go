@@ -211,6 +211,10 @@ func (c *ParseContext) afterToken(t tokenizer.Token) {
 	}
 	switch t.ID {
 	case tokenizer.Newline:
+		if c.capKind != capNone {
+			// the lines of a slash-dashed item are indented relative to the line it started on
+			return
+		}
 		c.lineIndent = 0
 		c.atLineStart = true
 		return
