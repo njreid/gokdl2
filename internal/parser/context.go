@@ -68,6 +68,31 @@ type ParseContext struct {
 
 	comment pendingComment
 
+	// comments is true when ParseComments is set; all of the fields below are only used then (see comments.go)
+	comments bool
+	// prevEnd is the line on which the previous content token (anything but whitespace and newlines) ended
+	prevEnd int
+	// lineIndent is the number of whitespace characters that start the current line; atLineStart is true until the
+	// first token that is not whitespace has been seen on the line
+	lineIndent  int
+	atLineStart bool
+	// inl collects comments inside a node for the next value or the node's Trailing comment; inl2 holds those that
+	// came behind a value that has not been added yet
+	inl, inl2 inlineBuf
+	// slash-dash capture in progress: kind, depth of the node stack when it began, raw text, the indentation of its
+	// line and its distance from the previous content
+	capKind   captureKind
+	capDepth  int
+	capOwner  *document.Node
+	capBuf    []byte
+	capIndent int
+	capG      int
+	// trailBlockNode is the node whose Trailing comment currently ends with a slash-dashed child block
+	trailBlockNode *document.Node
+	// typeG is the distance of a node's type annotation from the previous content, valid when typeGValid
+	typeG      int
+	typeGValid bool
+
 	lastAddedNode *document.Node
 	recent        recentTokens
 	alloc         *document.Allocator
@@ -156,6 +181,9 @@ func (c *ParseContext) addArgumentToken(n *document.Node, t tokenizer.Token, typ
 		v.Type = ta
 		v.EmptyType = ta == ""
 	}
+	if c.comments && c.capKind == capNone {
+		v.Comment = c.takeInline()
+	}
 	n.AddArgumentValue(v)
 	return nil
 }
@@ -177,7 +205,14 @@ func (c *ParseContext) addPropertyToken(n *document.Node, name tokenizer.Token, 
 		vt.Type = ta
 		vt.EmptyType = ta == ""
 	}
-	return n.AddPropertyValue(nt.ValueString(), vt, ""), nil
+	key := nt.ValueString()
+	if c.comments && c.capKind == capNone {
+		vt.Comment = c.takeInline()
+		if old, ok := n.Properties.Get(key); ok {
+			joinPropertyComment(old, vt)
+		}
+	}
+	return n.AddPropertyValue(key, vt, ""), nil
 }
 
 var errNodeStackEmpty = errors.New("node stack empty")
@@ -187,6 +222,14 @@ func (c *ParseContext) popNode() (*document.Node, error) {
 		return nil, errNodeStackEmpty
 	}
 	node := c.currentNode()
+	if c.comments {
+		if c.capKind == capNode && len(c.node)-1 == c.capDepth {
+			// the slash-dashed node ends here; the terminator is not part of it
+			c.endCapture(false, tokenizer.Token{})
+		} else if c.capKind == capNone {
+			c.flushTrailing(node)
+		}
+	}
 	c.node = c.node[0 : len(c.node)-1]
 	return node, nil
 }
@@ -214,6 +257,9 @@ func (c *ParseContext) pushState(newState parserState) {
 
 // pushChildren enters a child block opened by the '{' token open
 func (c *ParseContext) pushChildren(open tokenizer.Token) {
+	if c.comments && c.capKind == capNone {
+		c.flushTrailing(c.currentNode())
+	}
 	c.braces = append(c.braces, open)
 	c.pushState(stateChildren)
 }

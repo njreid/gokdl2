@@ -4,6 +4,9 @@ package document
 type Document struct {
 	Nodes   []*Node
 	Version int // 0=unknown, 1=KDLv1, 2=KDLv2; set by parser when detected
+	// Comment holds comment lines that belong to no node. The parser sets it only for a document without nodes (for
+	// example one that consists of comments and slash-dashed nodes); the generator writes it after the last node.
+	Comment []byte
 }
 
 // AddNode adds a Node to this document

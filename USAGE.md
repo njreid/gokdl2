@@ -196,6 +196,24 @@ age 76
 active true
 ```
 
+### Comments
+
+Comments are dropped unless `ParseOptions.ParseComments` is set. With it, each comment is kept on the node or value it belongs to, and `Generate` writes it back in the same place:
+
+```go
+doc, err := kdl.ParseWithOptions(strings.NewReader(data), kdl.ParseOptions{ParseComments: true})
+```
+
+| Where the comment is | Where it is kept |
+| --- | --- |
+| lines before a node | `Node.Comment.Before` |
+| on the node's line, after its last entry (or after `{`, or after `}`) | `Node.Comment.Trailing` |
+| between entries | `Value.Comment` of the entry after it |
+| at the end of a child block, before `}` | `Node.Comment.Inside` of the node that owns the block |
+| after the last top-level node | `Node.Comment.After` of that node (`Document.Comment` if there are no nodes) |
+
+Slash-dashed nodes, arguments, properties and child blocks are kept verbatim, as text, in the place they would be if they were a comment, so `/-a 1` survives generation and can be parsed again. Generating is idempotent after the first pass: parsing the output and generating again gives the same output. A blank line before a node or between comments is kept, a run of blank lines becomes one, and the indentation is normalised. See the doc comments of `document.Comment` for the exact rules.
+
 ## Unmarshaling
 
 ### via `Unmarshal`

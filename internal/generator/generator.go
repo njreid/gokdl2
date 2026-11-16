@@ -1,8 +1,10 @@
 package generator
 
 import (
+	"bytes"
 	"fmt"
 	"io"
+	"unicode"
 
 	"github.com/njreid/gokdl2/document"
 	"github.com/njreid/gokdl2/internal/tokenizer"
@@ -106,5 +108,22 @@ func (g *Generator) Generate(d *document.Document) error {
 			return err
 		}
 	}
-	return g.generateNodes(d.Nodes)
+	if err := g.generateNodes(d.Nodes); err != nil {
+		return err
+	}
+	if len(d.Comment) > 0 {
+		return g.generateComment(d.Comment)
+	}
+	return nil
+}
+
+// generateComment writes comment lines that belong to no node, one per line, without trailing whitespace.
+func (g *Generator) generateComment(text []byte) error {
+	var out []byte
+	for _, line := range bytes.Split(text, []byte{'\n'}) {
+		out = append(out, bytes.TrimRightFunc(line, unicode.IsSpace)...)
+		out = append(out, '\n')
+	}
+	_, err := g.w.Write(out)
+	return err
 }

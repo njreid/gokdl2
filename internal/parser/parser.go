@@ -73,11 +73,17 @@ func (p *Parser) NewContext() *ParseContext {
 func (p *Parser) NewContextOptions(opts ParseContextOptions) *ParseContext {
 	doc := document.New()
 	alloc := document.NewAllocator(opts.InputSizeEstimate / 25)
-	return &ParseContext{
+	c := &ParseContext{
 		doc:   doc,
 		alloc: alloc,
 		opts:  opts,
 	}
+	if opts.Flags.Has(ParseComments) {
+		c.comments = true
+		c.prevEnd = -1
+		c.atLineStart = true
+	}
+	return c
 }
 
 var eofToken = tokenizer.Token{
@@ -181,7 +187,23 @@ func (p *Parser) parse(c *ParseContext, token tokenizer.Token) error {
 
 func (p *Parser) Parse(c *ParseContext, token tokenizer.Token) error {
 	c.recent.Add(token)
-	return p.parse(c, token)
+	err := p.parse(c, token)
+	if c.comments && err != ErrReenterState {
+		c.afterToken(token)
+		if err == nil && token.ID == tokenizer.EOF {
+			// the end of the document may also have ended a node, so it is not enough to look for it in stateDocument
+			if c.capKind != capNone {
+				// a slash-dash that nothing follows, or one whose item the end of input cut short
+				kind, owner := c.capKind, c.capOwner
+				c.endCapture(false, token)
+				if kind != capNode {
+					c.flushTrailing(owner)
+				}
+			}
+			c.flushEOF()
+		}
+	}
+	return err
 }
 
 // ParseAll parses a slice of tokens and returns the resulting Document, or a non-nil error on failure

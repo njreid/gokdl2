@@ -114,10 +114,19 @@ func (p *Properties) string(unformatted bool, version tokenizer.Version) string 
 
 // appendTo appends the KDL representation of the property list to b and returns the expanded buffer.
 func (p *Properties) appendTo(b []byte, unformatted bool, version tokenizer.Version) []byte {
+	return p.appendToComments(b, unformatted, version, nil)
+}
+
+// appendToComments is appendTo, additionally writing the comment of each value before its key if cw is not nil.
+func (p *Properties) appendToComments(b []byte, unformatted bool, version tokenizer.Version, cw *commentWriter) []byte {
 	valOpts := argValueOpts(unformatted, version)
 	for _, e := range p.list {
 		k, v := e.Key, e.Value
 		b = append(b, ' ')
+		if cw != nil && len(v.Comment) > 0 {
+			b = appendInlineComment(b, v.Comment, cw.indent, cw.depth)
+			b = append(b, ' ')
+		}
 		if len(k) > 0 && tokenizer.IsBareIdentifierVersion(k, 0, version) {
 			b = append(b, k...)
 		} else {

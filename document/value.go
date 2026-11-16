@@ -47,14 +47,20 @@ func (f ValueFlag) Has(flag ValueFlag) bool {
 type Value struct {
 	// Type is the value type, if an annotation was provided
 	Type TypeAnnotation
-	// EmptyType is true when an explicitly empty type annotation, eg `("")1`, was present
-	EmptyType bool
 	// Value is the actual value
 	Value interface{}
-	// Flag is any flag assigned for use in output
-	Flag ValueFlag
+	// Comment is comment text between the previous entry (or the node name and type) and this value, kept when
+	// parsing with ParseComments. It is written before the value with one space after it; for a property, before
+	// "key=". It may hold block comments and slash-dashed arguments or properties, and, for a // comment on a line
+	// that is continued with a backslash, the backslash and the newline it needs. Comments after the last entry of a
+	// node are Comment.Trailing of the node instead. Only the generator reads it, and only when writing a document.
+	Comment []byte
 	// RawHashes indicates the number of '#' characters used in the raw string representation
 	RawHashes int
+	// Flag is any flag assigned for use in output
+	Flag ValueFlag
+	// EmptyType is true when an explicitly empty type annotation, eg `("")1`, was present
+	EmptyType bool
 }
 
 // valueOpts specify options for rendering Values as strings
