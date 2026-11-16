@@ -4,11 +4,22 @@
 
 This repository is an actively maintained fork of [`sblinch/kdl-go`](https://github.com/sblinch/kdl-go). The original project remains the historical upstream reference, while ongoing development for this fork lives here in `njreid/gokdl2`.
 
-## What's New in v0.7.0
+## What's New
+
+### v0.7.1
+
+Every name gokdl2 generates now parses back, in both KDL versions.
+
+- **Generation quotes names that would be misread:** v2 keywords and number-like names such as `true`, `inf`, `+1` and `.5` ([#5](https://github.com/njreid/gokdl2/pull/5)); v1 `true`, `false`, `null`, sign-plus-digit names and names starting with `r#` ([#39](https://github.com/njreid/gokdl2/issues/39)); and, in both versions, names starting with a backtick ([#40](https://github.com/njreid/gokdl2/issues/40)) or containing U+FEFF.
+- **Unmarshal:** repeated keys in `,multiple` map nodes no longer panic ([#3](https://github.com/njreid/gokdl2/issues/3), [#4](https://github.com/njreid/gokdl2/pull/4)).
+- **Parsing:** KDL v2 identifiers may start with a comma ([#41](https://github.com/njreid/gokdl2/issues/41)), and v2 rejects `-.5x`-style identifiers ([#5](https://github.com/njreid/gokdl2/pull/5)).
+- **Testing:** a fuzz target checks that any string round-trips as a node name, property key and argument.
+
+### v0.7.0
 
 Faster, stricter, and much closer to the spec. Full details are in [PR #29](https://github.com/njreid/gokdl2/pull/29) and the [v0.7.0 release](https://github.com/njreid/gokdl2/releases/tag/v0.7.0).
 
-### Performance
+#### Performance
 
 Parsing is about 2× faster, generation about 3× faster, and all of them allocate far less. These are medians of 5 alternating runs of v0.6.1 against v0.7.0, on a 1 MB document, using `bench_test.go`:
 
@@ -30,7 +41,7 @@ Where the gains come from:
 - **Generator:** builds each node in one buffer and writes it once ([#26](https://github.com/njreid/gokdl2/issues/26)).
 - **Marshaler:** caches struct type information across calls ([#27](https://github.com/njreid/gokdl2/issues/27)).
 
-### Correctness
+#### Correctness
 
 **Parsing now accepts valid KDL it used to reject:**
 - numbers directly followed by `}`, `{`, `;`, a comment, `/-` or `\`. For example, `n {x 1}` and `n 0xff;` failed before ([#32](https://github.com/njreid/gokdl2/issues/32));
@@ -67,14 +78,14 @@ Where the gains come from:
 - Structs stored in `interface{}` no longer panic ([#10](https://github.com/njreid/gokdl2/issues/10)).
 - Concurrent marshals no longer share scanner state ([#19](https://github.com/njreid/gokdl2/issues/19)).
 
-### Testing and tooling
+#### Testing and tooling
 
 - All 563 official kdl-org v1 and v2 test cases run on every `go test ./...`; the v2 suite used to be opt-in ([#36](https://github.com/njreid/gokdl2/issues/36)).
 - 118 cases ported from [kdl-rs](https://github.com/kdl-org/kdl-rs), the official Rust implementation, including expected error locations.
 - Fuzz tests check that the tokenizer's fast paths match its general path, and that strings survive a generate-and-parse round trip.
 - CI runs `go vet`, the tests and the race detector, and pushing a `v*` tag creates a GitHub release ([#16](https://github.com/njreid/gokdl2/issues/16)).
 
-### Upgrading from v0.6
+#### Upgrading from v0.6
 
 - **Stricter parsing:** documents that relied on the invalid forms listed above now fail to parse.
 - **Error positions:** error lines and columns differ, and an unclosed block's message starts with `unclosed child block:`.
