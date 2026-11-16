@@ -1,8 +1,6 @@
 package parser
 
 import (
-	"bytes"
-
 	"github.com/njreid/gokdl2/document"
 	"github.com/njreid/gokdl2/internal/tokenizer"
 	"github.com/njreid/gokdl2/relaxed"
@@ -37,14 +35,8 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 				return err
 			}
 
-			if c.opts.Flags.Has(ParseComments) {
-				c.comment.Write(c.recent.TrailingNewlines())
-				if c.comment.Len() > 0 {
-					node.Comment = &document.Comment{
-						Before: bytes.TrimSuffix(c.comment.CopyBytes(), []byte{'\n'}),
-					}
-					c.comment.Reset()
-				}
+			if c.comments && c.capKind == capNone {
+				c.attachBefore(node, t)
 			}
 			if c.typeAnnot.Valid() {
 				ta, err := document.TypeAnnotationFromToken(c.typeAnnot)
@@ -60,6 +52,9 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 		},
 		tokenizer.ParensOpen: func(c *ParseContext, t tokenizer.Token) error {
 			// a ( in the outermost context is the beginning of a type annotation for a node
+			if c.comments {
+				c.noteTypeStart(t)
+			}
 			c.pushState(stateTypeAnnot)
 			return nil
 		},
@@ -75,9 +70,8 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			if c.typeAnnot.Valid() && c.opts.Version != tokenizer.VersionV2 {
 				return unexpectedToken(c, t)
 			}
-			if c.opts.Flags.Has(ParseComments) {
-				c.comment.Write(c.recent.TrailingNewlines())
-				c.comment.Write(t.Data)
+			if c.comments {
+				c.noteComment(t)
 			}
 			return nil
 		},
@@ -87,6 +81,10 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			}
 			c.markIgnoreFromContinuation()
 			c.ignoreNextNode = true
+			c.slashdash = t
+			if c.comments {
+				c.startCapture(capNode, t)
+			}
 			return nil
 		},
 		tokenizer.Continuation: func(c *ParseContext, t tokenizer.Token) error {
@@ -107,10 +105,8 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 				return unexpectedToken(c, t)
 			}
 
-			if c.opts.Flags.Has(ParseComments) {
-				trailing := c.recent.TrailingNewlines()
-				c.comment.Write(trailing)
-				c.comment.Write(t.Data)
+			if c.comments {
+				c.noteComment(t)
 			}
 			return nil
 		},
@@ -124,10 +120,17 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			}
 			c.markIgnoreFromContinuation()
 			c.ignoreNextNode = true
+			c.slashdash = t
+			if c.comments {
+				c.startCapture(capNode, t)
+			}
 			return nil
 		},
 		tokenizer.ParensOpen: func(c *ParseContext, t tokenizer.Token) error {
 			// a ( inside a node declaration is the beginning of a type annotation for a node
+			if c.comments {
+				c.noteTypeStart(t)
+			}
 			c.pushState(stateTypeAnnot)
 			return nil
 		},
@@ -148,14 +151,8 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 				return err
 			}
 
-			if c.opts.Flags.Has(ParseComments) {
-				c.comment.Write(c.recent.TrailingNewlines())
-				if c.comment.Len() > 0 {
-					node.Comment = &document.Comment{
-						Before: bytes.TrimSuffix(c.comment.CopyBytes(), []byte{'\n'}),
-					}
-					c.comment.Reset()
-				}
+			if c.comments && c.capKind == capNone {
+				c.attachBefore(node, t)
 			}
 			if c.typeAnnot.Valid() {
 				ta, err := document.TypeAnnotationFromToken(c.typeAnnot)
@@ -173,24 +170,20 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			if c.ignoreNextNode {
 				return unexpectedToken(c, t)
 			}
+			if c.ignoreChildren == 0 {
+				c.realBlockClosed = c.currentNode()
+			}
 			if c.ignoreChildren > 0 {
 				c.ignoreChildren--
 				if c.ignoreChildren == 0 {
 					c.afterIgnoredChildBlock = !c.ignoreChildBlockFromContinuation
 					c.ignoreChildBlockFromContinuation = false
-				}
-			}
-
-			if c.opts.Flags.Has(ParseComments) {
-				c.comment.Write(c.recent.TrailingNewlines())
-				if c.comment.Len() > 0 {
-					lastNode := c.lastAddedNode
-					if lastNode.Comment == nil {
-						lastNode.Comment = &document.Comment{}
+					if c.capKind == capBlock {
+						c.endCapture(true, t)
 					}
-					lastNode.Comment.After = append(lastNode.Comment.After, bytes.TrimSuffix(c.comment.CopyBytes(), []byte{'\n'})...)
-					c.comment.Reset()
 				}
+			} else if c.comments && c.capKind == capNone {
+				c.flushInside()
 			}
 
 			_, err := c.popState()
@@ -208,6 +201,9 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 		tokenizer.ClassComment: func(c *ParseContext, t tokenizer.Token) error {
 			if c.opts.Version != tokenizer.VersionV2 {
 				return unexpectedToken(c, t)
+			}
+			if c.comments {
+				c.noteComment(t)
 			}
 			return nil
 		},
@@ -239,6 +235,9 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 		tokenizer.ClassComment: func(c *ParseContext, t tokenizer.Token) error {
 			if c.opts.Version != tokenizer.VersionV2 {
 				return unexpectedToken(c, t)
+			}
+			if c.comments {
+				c.noteComment(t)
 			}
 			return nil
 		},
@@ -282,18 +281,22 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 				c.ignoreNextNode = false
 				c.ignoreChildren++
 			}
-			c.pushChildren(t)
-			return nil
+			return c.pushChildren(t)
 		},
 		tokenizer.Continuation: func(c *ParseContext, t tokenizer.Token) error {
 			c.startContinuation()
 			return nil
 		},
 		tokenizer.ClassComment: func(c *ParseContext, t tokenizer.Token) error {
-			if c.opts.Version == tokenizer.VersionV2 {
-				return nil
+			if c.comments {
+				c.noteComment(t)
 			}
-			return unexpectedToken(c, t)
+			// a multi-line comment is whitespace (node-space) in both versions, so entries may follow it; a
+			// single-line comment is a node terminator and is followed by the newline that ends the node
+			if t.ID == tokenizer.MultiLineComment {
+				c.state = stateNodeParams
+			}
+			return nil
 		},
 		tokenizer.BraceClose: func(c *ParseContext, t tokenizer.Token) error {
 			_, _, err := c.popNodeAndState()
@@ -325,6 +328,9 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			}
 			c.markIgnoreFromContinuation()
 			c.ignoreNextArgProp = true
+			if c.comments {
+				c.startCapture(capArg, t)
+			}
 			return nil
 		},
 		tokenizer.ClassComment: func(c *ParseContext, t tokenizer.Token) error {
@@ -332,9 +338,15 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			if c.typeAnnot.Valid() && c.opts.Version != tokenizer.VersionV2 {
 				return unexpectedToken(c, t)
 			}
+			if c.comments {
+				c.noteComment(t)
+			}
 			return nil
 		},
 		tokenizer.SingleLineComment: func(c *ParseContext, t tokenizer.Token) error {
+			if c.comments {
+				c.noteComment(t)
+			}
 			if c.ignoreNextArgProp {
 				return nil
 			}
@@ -346,6 +358,9 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			return nil
 		},
 		tokenizer.ParensOpen: func(c *ParseContext, t tokenizer.Token) error {
+			if err := c.checkEntryAfterBlock(t); err != nil {
+				return err
+			}
 			// a ( inside a node declaration is the beginning of a type annotation for a value; only one is allowed
 			if c.typeAnnot.Valid() {
 				return unexpectedToken(c, t)
@@ -354,6 +369,9 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			return nil
 		},
 		tokenizer.BareIdentifier: func(c *ParseContext, t tokenizer.Token) error {
+			if err := c.checkEntryAfterBlock(t); err != nil {
+				return err
+			}
 			if c.opts.RelaxedNonCompliant.Permit(relaxed.NGINXSyntax) || c.opts.Version == tokenizer.VersionV2 {
 				// a bare identifier inside a node declaration in nginx syntax mode or KDL v2 is either an argument or a property name; save it
 				c.ident = t
@@ -367,6 +385,7 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			return nil
 		},
 		tokenizer.BraceClose: func(c *ParseContext, t tokenizer.Token) error {
+			c.endArgCapture(false, t)
 			_, _, err := c.popNodeAndState()
 			if err != nil {
 				return err
@@ -375,12 +394,16 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 		},
 
 		tokenizer.SuffixedDecimal: func(c *ParseContext, t tokenizer.Token) error {
+			if err := c.checkEntryAfterBlock(t); err != nil {
+				return err
+			}
 			// a suffixed identifier inside a node declaration can only be an argument
 			c.typeAnnot.Clear()
 			c.ident.Clear()
 
 			if c.ignoreNextArgProp {
 				c.ignoreNextArgProp = false
+				c.endArgCapture(true, t)
 			} else if err := c.addArgumentToken(c.currentNode(), t, c.typeAnnot); err != nil {
 				return err
 			}
@@ -389,12 +412,18 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			return nil
 		},
 		tokenizer.ClassString: func(c *ParseContext, t tokenizer.Token) error {
+			if err := c.checkEntryAfterBlock(t); err != nil {
+				return err
+			}
 			// a string value inside a node declaration is either an argument or a property name; save it
 			c.ident = t
 			c.state = stateArgProp
 			return nil
 		},
 		tokenizer.ClassNonStringValue: func(c *ParseContext, t tokenizer.Token) error {
+			if err := c.checkEntryAfterBlock(t); err != nil {
+				return err
+			}
 			// a non-string value inside a node declaration is always an argument, but we save it just to make sure it isn't followed by an equal sign
 			c.ident = t
 			c.state = stateArgProp
@@ -406,9 +435,12 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 				c.ignoreFromContinuation = false
 				c.ignoreNextArgProp = false
 				c.ignoreChildren++
+				if c.capKind == capArg {
+					// a slash-dashed child block, not an argument
+					c.capKind = capBlock
+				}
 			}
-			c.pushChildren(t)
-			return nil
+			return c.pushChildren(t)
 		},
 		tokenizer.ClassTerminator: func(c *ParseContext, t tokenizer.Token) error {
 			if c.continuation {
@@ -466,6 +498,7 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			}
 			if c.ignoreNextArgProp {
 				c.ignoreNextArgProp = false
+				c.endArgCapture(false, t)
 			} else if err := c.addArgumentToken(c.currentNode(), c.ident, c.typeAnnot); err != nil {
 				return err
 			}
@@ -478,6 +511,7 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 		tokenizer.TokenComment: func(c *ParseContext, t tokenizer.Token) error {
 			if c.ignoreNextArgProp {
 				c.ignoreNextArgProp = false
+				c.endArgCapture(false, t)
 			} else if c.ident.Valid() {
 				if err := c.addArgumentToken(c.currentNode(), c.ident, c.typeAnnot); err != nil {
 					return err
@@ -493,6 +527,9 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			c.ignoreNextArgProp = true
 			c.markIgnoreFromContinuation()
 			c.state = stateNodeParams
+			if c.comments {
+				c.startCapture(capArg, t)
+			}
 			return nil
 		},
 
@@ -502,6 +539,7 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			if c.ident.Valid() {
 				if c.ignoreNextArgProp {
 					c.ignoreNextArgProp = false
+					c.endArgCapture(false, t)
 				} else if err := c.addArgumentToken(c.currentNode(), c.ident, c.typeAnnot); err != nil {
 					return err
 				}
@@ -514,8 +552,7 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 				c.ignoreChildren++
 			}
 
-			c.pushChildren(t)
-			return nil
+			return c.pushChildren(t)
 		},
 		tokenizer.Equals: func(c *ParseContext, t tokenizer.Token) error {
 			// cannot cannot use a type annotation on a property key
@@ -525,11 +562,14 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			}
 
 			// equals indicates that it's a property
+			if c.comments {
+				c.mergeInline()
+			}
 			c.state = statePropertyValue
 			return nil
 		},
 
-		tokenizer.Whitespace: func(c *ParseContext, p tokenizer.Token) error {
+		tokenizer.Whitespace: func(c *ParseContext, t tokenizer.Token) error {
 			if c.opts.Version == tokenizer.VersionV2 {
 				return nil
 			}
@@ -537,6 +577,7 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			// whitespace indicates it was definitely an arg, not a prop
 			if c.ignoreNextArgProp {
 				c.ignoreNextArgProp = false
+				c.endArgCapture(false, t)
 			} else if err := c.addArgumentToken(c.currentNode(), c.ident, c.typeAnnot); err != nil {
 				return err
 			}
@@ -549,12 +590,16 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 
 		tokenizer.ClassComment: func(c *ParseContext, t tokenizer.Token) error {
 			if c.opts.Version == tokenizer.VersionV2 {
+				if c.comments {
+					c.noteComment(t)
+				}
 				return nil
 			}
 			// in v1 a comment directly after a value ends the argument, as whitespace does; the comment itself is then
 			// handled by stateNodeParams (a single-line comment also ends the node there)
 			if c.ignoreNextArgProp {
 				c.ignoreNextArgProp = false
+				c.endArgCapture(false, t)
 			} else if err := c.addArgumentToken(c.currentNode(), c.ident, c.typeAnnot); err != nil {
 				return err
 			}
@@ -577,6 +622,7 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 				// if we're at the end of the node and have an identifier but didn't find an equal sign, it was just an argument
 				if c.ignoreNextArgProp {
 					c.ignoreNextArgProp = false
+					c.endArgCapture(false, t)
 				} else if err := c.addArgumentToken(c.currentNode(), c.ident, c.typeAnnot); err != nil {
 					return err
 				}
@@ -592,6 +638,7 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			// if we found a value, but we already have an identifier queued, it was an argument, so save it
 			if c.ignoreNextArgProp {
 				c.ignoreNextArgProp = false
+				c.endArgCapture(false, t)
 			} else if err := c.addArgumentToken(c.currentNode(), c.ident, c.typeAnnot); err != nil {
 				return err
 			}
@@ -607,6 +654,7 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 				// if we're at the end of the node and have an identifier but didn't find an equal sign, it was just an argument
 				if c.ignoreNextArgProp {
 					c.ignoreNextArgProp = false
+					c.endArgCapture(false, t)
 				} else if err := c.addArgumentToken(c.currentNode(), c.ident, c.typeAnnot); err != nil {
 					return err
 				}
@@ -632,6 +680,9 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			if c.opts.Version != tokenizer.VersionV2 {
 				return unexpectedToken(c, t)
 			}
+			if c.comments {
+				c.noteComment(t)
+			}
 			return nil
 		},
 		tokenizer.Continuation: func(c *ParseContext, t tokenizer.Token) error {
@@ -655,6 +706,7 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			}
 			if c.ignoreNextArgProp {
 				c.ignoreNextArgProp = false
+				c.endArgCapture(true, t)
 			} else if _, err := c.addPropertyToken(c.currentNode(), c.ident, t, c.typeAnnot); err != nil {
 				return err
 			}

@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/njreid/gokdl2/document"
@@ -73,11 +74,17 @@ func (p *Parser) NewContext() *ParseContext {
 func (p *Parser) NewContextOptions(opts ParseContextOptions) *ParseContext {
 	doc := document.New()
 	alloc := document.NewAllocator(opts.InputSizeEstimate / 25)
-	return &ParseContext{
+	c := &ParseContext{
 		doc:   doc,
 		alloc: alloc,
 		opts:  opts,
 	}
+	if opts.Flags.Has(ParseComments) {
+		c.comments = true
+		c.prevEnd = -1
+		c.atLineStart = true
+	}
+	return c
 }
 
 var eofToken = tokenizer.Token{
@@ -139,6 +146,18 @@ func (p *Parser) parse(c *ParseContext, token tokenizer.Token) error {
 	if c.afterIgnoredChildBlock {
 		switch token.ID {
 		case tokenizer.Whitespace, tokenizer.SingleLineComment, tokenizer.MultiLineComment:
+		case tokenizer.TokenComment:
+			// v2 allows further slashdashed child blocks after an ignored one; the state that follows still has to
+			// see a child block, so the flag stays set until a real block, a newline or the end of input
+			if c.opts.Version != tokenizer.VersionV2 {
+				return unexpectedAfterIgnoredChildBlock(token)
+			}
+		case tokenizer.BraceOpen:
+			// v2: ignored child blocks may precede the node's one real child block
+			if c.opts.Version != tokenizer.VersionV2 || c.realBlockClosed == c.currentNode() {
+				return unexpectedAfterIgnoredChildBlock(token)
+			}
+			c.afterIgnoredChildBlock = false
 		case tokenizer.Newline, tokenizer.EOF, tokenizer.Continuation:
 			if token.ID == tokenizer.Newline || token.ID == tokenizer.EOF || token.ID == tokenizer.Continuation {
 				c.afterIgnoredChildBlock = false
@@ -159,12 +178,27 @@ func (p *Parser) parse(c *ParseContext, token tokenizer.Token) error {
 		case tokenizer.Whitespace, tokenizer.SingleLineComment, tokenizer.MultiLineComment:
 			// continue waiting for the first token of the next (continued) line
 		default:
+			// a line continuation must end its line: only whitespace and comments may follow it before the newline
+			if !c.continuationNewlineSeen && token.ID != tokenizer.EOF {
+				return errorAt(token, errors.New("unexpected "+tokenLabel(token.ID)+" after '\\'; a line continuation must be followed by a newline"))
+			}
 			// this is the first token of the next (continued) line
 			c.stopContinuation()
 			c.justContinuedLine = true
 		}
 	} else if !isTriviaToken(token.ID) {
 		c.justContinuedLine = false
+	}
+
+	// arguments, properties and type annotations cannot follow a node's child block (ignored child blocks can)
+	if c.realBlockClosed != nil && c.realBlockClosed == c.currentNode() && !c.ignoreNextArgProp {
+		switch c.state {
+		case stateNode, stateNodeParams, stateArgProp:
+			if token.ID == tokenizer.ParensOpen || (isValueLikeToken(token.ID) && token.ID != tokenizer.BraceClose) ||
+				token.ID == tokenizer.ExpressionString {
+				return errorAt(token, errors.New("unexpected "+tokenLabel(token.ID)+"; arguments and properties cannot follow the node's child block"))
+			}
+		}
 	}
 
 	handler := lookupTransition(c.state, token.ID)
@@ -181,7 +215,23 @@ func (p *Parser) parse(c *ParseContext, token tokenizer.Token) error {
 
 func (p *Parser) Parse(c *ParseContext, token tokenizer.Token) error {
 	c.recent.Add(token)
-	return p.parse(c, token)
+	err := p.parse(c, token)
+	if c.comments && err != ErrReenterState {
+		c.afterToken(token)
+		if err == nil && token.ID == tokenizer.EOF {
+			// the end of the document may also have ended a node, so it is not enough to look for it in stateDocument
+			if c.capKind != capNone {
+				// a slash-dash that nothing follows, or one whose item the end of input cut short
+				kind, owner := c.capKind, c.capOwner
+				c.endCapture(false, token)
+				if kind != capNode {
+					c.flushPost(owner)
+				}
+			}
+			c.flushEOF()
+		}
+	}
+	return err
 }
 
 // ParseAll parses a slice of tokens and returns the resulting Document, or a non-nil error on failure
@@ -191,6 +241,20 @@ func (p *Parser) ParseAll(tokens []tokenizer.Token) (*document.Document, error) 
 }
 
 var ErrReenterState = fmt.Errorf("reenter state")
+
+// Finish reports an error if the document ended in the middle of a construct: an unclosed child block, or a
+// node-level slashdash with no node after it. It must be called after the EOF token has been parsed. The error is a
+// *PosError carrying the position of the offending '{' or '/-'.
+func (p *Parser) Finish(c *ParseContext) error {
+	if len(c.braces) > 0 {
+		open := c.braces[len(c.braces)-1]
+		return errorAt(open, errors.New("unclosed child block: unexpected end of input; expected '}'"))
+	}
+	if c.ignoreNextNode {
+		return errorAt(c.slashdash, errors.New("unexpected end of input after '/-'; expected a node"))
+	}
+	return nil
+}
 
 // ParseAllContext parses a slice of tokens using the given context and returns the resulting Document, or a non-nil
 // error on failure
@@ -215,6 +279,9 @@ func (p *Parser) ParseAllContext(c *ParseContext, tokens []tokenizer.Token) (*do
 	}
 
 	if err := p.Parse(c, eof); err != nil {
+		return nil, p.annotatedError(err, eof, tokens, len(tokens)-1)
+	}
+	if err := p.Finish(c); err != nil {
 		return nil, p.annotatedError(err, eof, tokens, len(tokens)-1)
 	}
 

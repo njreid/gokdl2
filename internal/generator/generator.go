@@ -1,8 +1,10 @@
 package generator
 
 import (
+	"bytes"
 	"fmt"
 	"io"
+	"unicode"
 
 	"github.com/njreid/gokdl2/document"
 	"github.com/njreid/gokdl2/internal/tokenizer"
@@ -97,7 +99,7 @@ func (g *Generator) generateNodes(nodes []*document.Node) error {
 
 // Generate generates the KDL for a Document, and returns a non-nil error on failure
 func (g *Generator) Generate(d *document.Document) error {
-	if g.options.EmitVersionMarker {
+	if g.options.EmitVersionMarker && !hasVersionMarker(d) {
 		v := g.options.Version
 		if v == tokenizer.VersionAuto {
 			v = tokenizer.VersionV1
@@ -106,5 +108,36 @@ func (g *Generator) Generate(d *document.Document) error {
 			return err
 		}
 	}
-	return g.generateNodes(d.Nodes)
+	if err := g.generateNodes(d.Nodes); err != nil {
+		return err
+	}
+	if len(d.Comment) > 0 {
+		return g.generateComment(d.Comment)
+	}
+	return nil
+}
+
+// generateComment writes comment lines that belong to no node, one per line, without trailing whitespace.
+func (g *Generator) generateComment(text []byte) error {
+	var out []byte
+	for _, line := range bytes.Split(text, []byte{'\n'}) {
+		out = append(out, bytes.TrimRightFunc(line, unicode.IsSpace)...)
+		out = append(out, '\n')
+	}
+	_, err := g.w.Write(out)
+	return err
+}
+
+// hasVersionMarker reports whether the document already starts with a "/- kdl-version" marker, which is kept as a
+// comment when the document is parsed with ParseComments.
+func hasVersionMarker(d *document.Document) bool {
+	var text []byte
+	if len(d.Nodes) > 0 {
+		if c := d.Nodes[0].Comment; c != nil {
+			text = c.Before
+		}
+	} else {
+		text = d.Comment
+	}
+	return bytes.HasPrefix(bytes.TrimLeft(text, "\n"), []byte("/- kdl-version"))
 }

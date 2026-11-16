@@ -128,6 +128,14 @@ func parseOne(s *tokenizer.Scanner, inputSizeEstimate int) (*document.Document, 
 	if s.Err() != nil {
 		return nil, s.Err()
 	}
+	if err := p.Finish(c); err != nil {
+		var pe *parser.PosError
+		line, column := 0, 0
+		if errors.As(err, &pe) {
+			line, column = pe.Line, pe.Column
+		}
+		return nil, fmt.Errorf("parse failed: %w at line %d, column %d\n%s", err, line+1, column+1, s.ExtractLineAtPosition(line+1, column+1))
+	}
 
 	doc := c.Document()
 	doc.Version = int(s.Version)

@@ -1,7 +1,6 @@
 package document
 
 import (
-	"bytes"
 	"io"
 	"strings"
 	"sync"
@@ -12,11 +11,40 @@ import (
 // TypeAnnotation represents a type annotation in a KDL document
 type TypeAnnotation string
 
+// Comment holds the comments of a node, as collected when parsing with ParseComments and written when generating a
+// document. Each field is comment text, not including indentation, and may span several lines: a line break inside the
+// text is written as a line break, and the lines after the first are prefixed with the indentation of the node (of its
+// child block, for Inside). The text is written as it is, except that trailing whitespace is removed from every line.
+// The text of slash-dashed nodes, arguments, properties and child blocks is kept verbatim in the field of the comment
+// they would be in if they were a comment.
 type Comment struct {
-	// Before specifies a comment that appears before the node, if non-nil
+	// Before is the comment lines before the node, including blank lines: a blank line is an empty line in the
+	// text, and Before ending in a newline (or being empty but non-nil) means a blank line before the node. Written
+	// on lines of their own before the node. Slash-dashed nodes before this node are part of it.
 	Before []byte
-	// After specifies a comment that appears after the node, if non-nil
+	// After is the comment lines after the node. The parser uses it only for the comments after the last top-level
+	// node at the end of the document. The generator writes it on lines of its own after the node's last line.
 	After []byte
+	// Trailing is the comment text on the node's first line, after its last entry, before the end of the line, such
+	// as "// x" or "/* x */" (several are separated by a space). If the node has a child block, it is the text after
+	// the "{" on the same line, as in "a 1 { // x". It is also where the slash-dashed arguments, properties and child
+	// blocks go that nothing follows, in a node without a child block. The generator writes it at the end of the first
+	// line, separated by one space: after the last entry, or after " {" if the node has a child block. When
+	// AddSemicolons is set, a node with comments at the end of its line is not given a semicolon.
+	Trailing []byte
+	// BeforeBlock is, for a node that has a child block, the text between its last entry and the "{": block comments,
+	// and slash-dashed arguments, properties and child blocks (in KDL v2, where those may come before the real
+	// block). The generator writes it before " {", separated by one space. If the node has no child block it is
+	// written before Trailing, so entries are never written after a "}".
+	BeforeBlock []byte
+	// Closing is the text on the same line after the "}" that closes the node's child block: comments, and
+	// slash-dashed child blocks, which are valid before and after the real block. The generator writes it after the
+	// "}", separated by one space. Slash-dashed arguments and properties are not valid there, and are never put in it.
+	Closing []byte
+	// Inside is the comment lines at the end of the node's child block, after the last child and before "}", also
+	// for a block without children ("a {\n // only\n}"). The generator writes them indented at child depth just
+	// before the "}", and writes a block for Inside even if the node has no children.
+	Inside []byte
 }
 
 // Node represents a single node in a KDL document
@@ -311,28 +339,14 @@ func (n *Node) WriteToOptions(w io.Writer, opts NodeWriteOptions) (int64, error)
 	indented := opts.Depth > 0 && opts.LeadingTrailingSpace
 	v2 := opts.Version == tokenizer.VersionV2
 
-	if n.Comment != nil {
-		if n.Comment.Before != nil {
-			comment := bytes.Trim(n.Comment.Before, " \t")
-			lines := bytes.Split(comment, []byte{'\n'})
-
-			newlineCount := 0
-			for _, line := range lines {
-				line = bytes.TrimSpace(line)
-				if len(line) > 0 {
-					if indented {
-						buf = appendIndent(buf, opts.Depth)
-					}
-					buf = append(buf, line...)
-					newlineCount = 0
-				} else {
-					newlineCount++
-				}
-				if newlineCount < 2 {
-					buf = append(buf, '\n')
-				}
-			}
-		}
+	// comments inside a line are only written when writing a document; String and friends leave them out
+	inline := opts.LeadingTrailingSpace
+	commentDepth := 0
+	if indented {
+		commentDepth = opts.Depth
+	}
+	if n.Comment != nil && n.Comment.Before != nil {
+		buf = appendCommentLines(buf, n.Comment.Before, opts.Indent, commentDepth)
 	}
 
 	if indented {
@@ -364,14 +378,45 @@ func (n *Node) WriteToOptions(w io.Writer, opts NodeWriteOptions) (int64, error)
 		if opts.NameAndType || i > 0 {
 			buf = append(buf, ' ')
 		}
+		if inline && len(arg.Comment) > 0 {
+			buf = appendInlineComment(buf, arg.Comment, opts.Indent, commentDepth)
+			buf = append(buf, ' ')
+		}
 		buf = arg.appendString(buf, argOpts, opts.Version)
 	}
 	if n.Properties.Exist() {
-		buf = n.Properties.appendTo(buf, opts.IgnoreFlags, opts.Version)
+		var cw *commentWriter
+		if inline {
+			cw = &commentWriter{indent: opts.Indent, depth: commentDepth}
+		}
+		buf = n.Properties.appendToComments(buf, opts.IgnoreFlags, opts.Version, cw)
 	}
 
-	if len(n.Children) > 0 {
-		buf = append(buf, ' ', '{', '\n')
+	var trailing, before, closing, inside, after []byte
+	if n.Comment != nil {
+		after = n.Comment.After
+		if inline {
+			trailing = n.Comment.Trailing
+			before = n.Comment.BeforeBlock
+			closing = n.Comment.Closing
+			inside = n.Comment.Inside
+		}
+	}
+	hasBlock := len(n.Children) > 0 || len(inside) > 0
+	space := func(text []byte) {
+		buf = append(buf, ' ')
+		buf = appendInlineComment(buf, text, opts.Indent, commentDepth)
+	}
+
+	if len(before) > 0 {
+		space(before)
+	}
+	if hasBlock {
+		buf = append(buf, ' ', '{')
+		if len(trailing) > 0 {
+			space(trailing)
+		}
+		buf = append(buf, '\n')
 		flush()
 		if err != nil {
 			return nw, err
@@ -387,27 +432,33 @@ func (n *Node) WriteToOptions(w io.Writer, opts NodeWriteOptions) (int64, error)
 			}
 		}
 
+		if len(inside) > 0 {
+			buf = appendCommentLines(buf, inside, opts.Indent, opts.Depth+1)
+		}
 		if opts.Depth > 0 {
 			buf = appendIndent(buf, opts.Depth)
 		}
 		buf = append(buf, '}')
+		if len(closing) > 0 {
+			space(closing)
+		}
+	} else if len(closing) > 0 || len(trailing) > 0 || len(before) > 0 {
+		// no block is written, so what would follow it follows the entries; Trailing is last, a // comment ends it
+		if len(closing) > 0 {
+			space(closing)
+		}
+		if len(trailing) > 0 {
+			space(trailing)
+		}
 	} else if opts.AddSemicolons {
 		buf = append(buf, ';')
 	}
 
-	if n.Comment != nil && n.Comment.After != nil {
-		comment := bytes.Trim(n.Comment.After, " \t")
-		lines := bytes.Split(comment, []byte{'\n'})
-
-		for _, line := range lines {
-			if indented {
-				buf = appendIndent(buf, opts.Depth)
-			}
-			buf = append(buf, bytes.TrimSpace(line)...)
-			buf = append(buf, '\n')
-		}
-	} else if opts.LeadingTrailingSpace {
+	if opts.LeadingTrailingSpace || len(after) > 0 {
 		buf = append(buf, '\n')
+	}
+	if len(after) > 0 {
+		buf = appendCommentLines(buf, after, opts.Indent, commentDepth)
 	}
 	flush()
 

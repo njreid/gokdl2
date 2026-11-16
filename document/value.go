@@ -47,14 +47,20 @@ func (f ValueFlag) Has(flag ValueFlag) bool {
 type Value struct {
 	// Type is the value type, if an annotation was provided
 	Type TypeAnnotation
-	// EmptyType is true when an explicitly empty type annotation, eg `("")1`, was present
-	EmptyType bool
 	// Value is the actual value
 	Value interface{}
-	// Flag is any flag assigned for use in output
-	Flag ValueFlag
+	// Comment is comment text between the previous entry (or the node name and type) and this value, kept when
+	// parsing with ParseComments. It is written before the value with one space after it; for a property, before
+	// "key=". It may hold block comments and slash-dashed arguments or properties, and, for a // comment on a line
+	// that is continued with a backslash, the backslash and the newline it needs. Comments after the last entry of a
+	// node are Comment.Trailing of the node instead. Only the generator reads it, and only when writing a document.
+	Comment []byte
 	// RawHashes indicates the number of '#' characters used in the raw string representation
 	RawHashes int
+	// Flag is any flag assigned for use in output
+	Flag ValueFlag
+	// EmptyType is true when an explicitly empty type annotation, eg `("")1`, was present
+	EmptyType bool
 }
 
 // valueOpts specify options for rendering Values as strings
@@ -275,9 +281,21 @@ func (v *Value) value(b []byte, opts valueOpts) []byte {
 		}
 	case *big.Float:
 		exp := x.MantExp(nil)
-		if exp > 9 || exp < -9 {
+		switch {
+		case x.IsInf():
+			// an overflowed big.Float is written like a float64 infinity
+			return (&Value{Value: math.Inf(x.Sign())}).value(b, opts)
+		case x.Sign() == 0:
+			// an underflowed big.Float is written like a float64 zero
+			if x.Signbit() {
+				b = append(b, '-')
+			}
+			b = append(b, "0.0"...)
+		case exp > bigFloatDirectBinExp || exp < -bigFloatDirectBinExp:
+			b = appendHugeBigFloat(b, x)
+		case exp > 9 || exp < -9:
 			b = x.Append(b, 'E', -1)
-		} else {
+		default:
 			b = x.Append(b, 'f', 6)
 		}
 
@@ -497,6 +515,145 @@ func stripUnderscores(b []byte, underscoreCount int) []byte {
 	return clean
 }
 
+// bigFloatDirectExp is the largest decimal exponent magnitude parsed directly with big.Float. math/big's decimal
+// conversion slows down enormously for huge exponents (1e-1000000 takes minutes), so beyond this the value is built
+// from the mantissa and a power of ten computed by repeated squaring.
+const bigFloatDirectExp = 1000
+
+// bigFloatMaxDecimalExp bounds decimal exponents that a big.Float can represent (its binary exponent is an int32);
+// anything larger overflows to ±Inf or underflows to ±0.
+const bigFloatMaxDecimalExp = 646_000_000
+
+// bigFloatDirectBinExp is the largest binary exponent formatted directly by big.Float, whose exact decimal
+// conversion takes time proportional to the exponent. It corresponds roughly to bigFloatDirectExp.
+const bigFloatDirectBinExp = 3400
+
+// pow10BigFloat returns 10^n (n >= 0) at the given precision, by repeated squaring.
+func pow10BigFloat(n int64, prec uint) *big.Float {
+	pow := new(big.Float).SetPrec(prec).SetInt64(1)
+	base := new(big.Float).SetPrec(prec).SetInt64(10)
+	for ; n > 0; n >>= 1 {
+		if n&1 == 1 {
+			pow.Mul(pow, base)
+		}
+		base.Mul(base, base)
+	}
+	return pow
+}
+
+// appendHugeBigFloat appends x, a finite non-zero big.Float with a very large exponent, in E notation, in time that
+// does not depend on the exponent. It scales x into [1, 10) by a power of ten computed at high precision, then writes
+// the shortest mantissa (at most 17 significant digits) that parseBigFloat turns back into exactly x, so generated
+// numbers round-trip.
+func appendHugeBigFloat(b []byte, x *big.Float) []byte {
+	const prec = 128
+	abs := new(big.Float).SetPrec(prec).Abs(x)
+	one := new(big.Float).SetPrec(prec).SetInt64(1)
+	ten := new(big.Float).SetPrec(prec).SetInt64(10)
+
+	// estimate the decimal exponent from the binary one, then correct it against the exact scaled value
+	e10 := int64(math.Floor(float64(abs.MantExp(nil)-1) * math.Log10(2)))
+	scaled := new(big.Float).SetPrec(prec)
+	scale := func() {
+		if e10 >= 0 {
+			scaled.Quo(abs, pow10BigFloat(e10, prec))
+		} else {
+			scaled.Mul(abs, pow10BigFloat(-e10, prec))
+		}
+	}
+	scale()
+	for i := 0; i < 8; i++ {
+		switch {
+		case scaled.Cmp(ten) >= 0:
+			e10++
+		case scaled.Cmp(one) < 0:
+			e10--
+		default:
+			i = 8
+			continue
+		}
+		scale()
+	}
+
+	sign := ""
+	if x.Sign() < 0 {
+		sign = "-"
+	}
+	var candidate string
+	for digits := 1; digits <= 17; digits++ {
+		mant := scaled.Text('f', digits-1)
+		exp := e10
+		if strings.HasPrefix(mant, "10") {
+			// rounding carried into a new digit: 9.99… became 10.0…
+			mant = new(big.Float).SetPrec(prec).Quo(scaled, ten).Text('f', digits-1)
+			exp++
+		}
+		candidate = sign + mant + "E" + strconv.FormatInt(exp, 10)
+		if exp >= 0 {
+			candidate = sign + mant + "E+" + strconv.FormatInt(exp, 10)
+		}
+		if back, err := parseBigFloat(candidate); err == nil && back.Cmp(x) == 0 {
+			break
+		}
+	}
+	return append(b, candidate...)
+}
+
+// parseBigFloat parses a base-10 floating point string that is outside the float64 range, at 53 bits of precision,
+// in time that does not depend on the size of the exponent.
+func parseBigFloat(s string) (*big.Float, error) {
+	mant, exp := s, int64(0)
+	if i := strings.IndexAny(s, "eE"); i >= 0 {
+		mant = s[:i]
+		e, err := strconv.ParseInt(s[i+1:], 10, 64)
+		if err != nil {
+			// the exponent itself does not fit in an int64: certainly out of range
+			e = math.MaxInt64
+			if strings.HasPrefix(s[i+1:], "-") {
+				e = math.MinInt64
+			}
+		}
+		exp = e
+	}
+	if exp >= -bigFloatDirectExp && exp <= bigFloatDirectExp {
+		n := big.NewFloat(0)
+		if _, ok := n.SetString(s); !ok {
+			return nil, fmt.Errorf("invalid number %s", s)
+		}
+		return n, nil
+	}
+
+	m, ok := new(big.Float).SetPrec(128).SetString(mant)
+	if !ok {
+		return nil, fmt.Errorf("invalid number %s", s)
+	}
+	result := new(big.Float).SetPrec(53)
+	switch {
+	case m.Sign() == 0:
+		return result.Set(m), nil
+	case exp > bigFloatMaxDecimalExp:
+		return result.SetInf(m.Sign() < 0), nil
+	case exp < -bigFloatMaxDecimalExp:
+		if m.Sign() < 0 {
+			return result.Neg(result), nil
+		}
+		return result, nil
+	}
+
+	// 10^|exp| by repeated squaring, at 128 bits so the final rounding to 53 bits is exact in practice
+	abs := exp
+	if abs < 0 {
+		abs = -abs
+	}
+	pow := pow10BigFloat(abs, 128)
+	if exp > 0 {
+		m.Mul(m, pow)
+	} else {
+		m.Quo(m, pow)
+	}
+	return result.Set(m), nil
+}
+
 // parseNumber parses a number from b in the specified base, and returns an interface{} containing either a float64,
 // an int64, a *big.Float, or a *big.Int, depending on the size and type of the number in b
 func parseNumber(b []byte, base int) (interface{}, error) {
@@ -533,10 +690,19 @@ func parseNumber(b []byte, base int) (interface{}, error) {
 		// just returns 0, which is wrong. So if ParseFloat returns 0.0 and b contains a nonzero coefficient, we reparse
 		// as a big.Float.
 		if errors.Is(err, strconv.ErrRange) || (err == nil && f == 0.0 && isNonzeroSciNot(b)) {
-			err = nil
-			n := big.NewFloat(0)
-			n.SetString(bstr)
-			v = n
+			var bf *big.Float
+			bf, err = parseBigFloat(bstr)
+			switch {
+			case err != nil:
+			case bf.IsInf():
+				// overflow is an infinity, like #inf, and a float64 so that it compares equal once written back
+				v = math.Inf(bf.Sign())
+			case bf.Sign() == 0:
+				// underflow is a (signed) zero, likewise
+				v = signedZero(bf.Signbit())
+			default:
+				v = bf
+			}
 		} else {
 			v = f
 		}
@@ -687,4 +853,12 @@ func ValueFromTokenInto(v *Value, t tokenizer.Token) error {
 	}
 
 	return err
+}
+
+// signedZero returns -0.0 if negative is true, otherwise 0.0.
+func signedZero(negative bool) float64 {
+	if negative {
+		return math.Copysign(0, -1)
+	}
+	return 0
 }
