@@ -6,6 +6,14 @@ This repository is an actively maintained fork of [`sblinch/kdl-go`](https://git
 
 ## What's New
 
+### v0.7.2
+
+Comments survive a round trip, and the parser is much harder to trip up.
+
+- **Comments ([#43](https://github.com/njreid/gokdl2/issues/43)):** with `ParseComments`, every comment is kept in place: trailing, end-of-block and end-of-document comments, comments between arguments and after `}`, multi-line `/* */` comments with their indentation, and slash-dashed nodes, entries and blocks. Output is stable on a second pass. See [USAGE.md](USAGE.md#comments).
+- **Hang fixed ([#45](https://github.com/njreid/gokdl2/issues/45)):** a number with a huge exponent, such as `1e-10210200`, made parsing or generating run for minutes. It now takes well under a millisecond and round-trips exactly.
+- **Parsing edge cases ([#44](https://github.com/njreid/gokdl2/issues/44)):** values at the very end of the input are no longer dropped. Unclosed blocks, a dangling `/-`, duplicate child blocks, entries after a block, and text after a `\` continuation are rejected. `/* */` works as a separator everywhere.
+
 ### v0.7.1
 
 Every name gokdl2 generates now parses back, in both KDL versions.
