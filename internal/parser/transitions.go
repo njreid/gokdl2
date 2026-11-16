@@ -294,10 +294,12 @@ var stateTransitions = map[parserState]map[tokenizer.TokenID]stateTransitionFunc
 			return nil
 		},
 		tokenizer.ClassComment: func(c *ParseContext, t tokenizer.Token) error {
-			if c.opts.Version == tokenizer.VersionV2 {
-				return nil
+			// a multi-line comment is whitespace (node-space) in both versions, so entries may follow it; a
+			// single-line comment is a node terminator and is followed by the newline that ends the node
+			if t.ID == tokenizer.MultiLineComment {
+				c.state = stateNodeParams
 			}
-			return unexpectedToken(c, t)
+			return nil
 		},
 		tokenizer.BraceClose: func(c *ParseContext, t tokenizer.Token) error {
 			_, _, err := c.popNodeAndState()
